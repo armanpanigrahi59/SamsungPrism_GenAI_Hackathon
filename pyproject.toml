@@ -1,0 +1,44 @@
+[project]
+name = "prism-agent"
+version = "0.1.0"
+description = "Interruptible real-time agent: speculative dual-process architecture (Samsung PRISM Theme 05)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "trio>=0.24",
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-trio>=0.8",
+]
+llm = [
+    "anthropic>=0.40",       # for PRISM_NLU_BACKEND=anthropic (paid)
+    # Note: PRISM_NLU_BACKEND=groq needs NO pip package -- GroqNLUProvider
+    # calls Groq's OpenAI-compatible REST API via stdlib urllib only.
+    # Just set GROQ_API_KEY (free key at https://console.groq.com).
+]
+local = [
+    "faster-whisper>=1.0",   # for PRISM_ASR_BACKEND=whisper (free, local)
+    # Ollama itself needs no pip package for PRISM_NLU_BACKEND=ollama --
+    # it's a separately installed local server (https://ollama.com),
+    # called over plain HTTP via the standard library.
+]
+
+[tool.setuptools.packages.find]
+# Without this, setuptools' flat-layout auto-discovery sees both `agent/`
+# (a real Python package) and `manifests/` (just a data directory holding
+# travel_manifest.json, no __init__.py) as ambiguous top-level candidates
+# and refuses to guess, failing `pip install -e .` with "Multiple
+# top-level packages discovered in a flat-layout". Telling it explicitly
+# to package only `agent*` resolves this. `manifests/` and `tests/` stay
+# on disk as plain directories either way -- nothing reads them through
+# the installed package, only via relative paths from the project root
+# (see manifests/travel_manifest.json usage in demo.py / tests/conftest.py),
+# so excluding them from packaging changes nothing at runtime.
+include = ["agent*"]
+
+[tool.pytest.ini_options]
+trio_mode = true
+testpaths = ["tests"]
