@@ -25,6 +25,16 @@ local = [
     # it's a separately installed local server (https://ollama.com),
     # called over plain HTTP via the standard library.
 ]
+web = [
+    # Browser frontend bridge (server/app.py + frontend/index.html).
+    # Quart-Trio, not FastAPI/Flask -- the whole agent core is built on
+    # trio's structured concurrency (CancelScope-based cancellation is
+    # the entire interruption mechanism), so the web server needs to run
+    # on trio too, not asyncio. See server/app.py's module docstring.
+    "quart>=0.19",
+    "quart-trio>=0.11",
+    "hypercorn>=0.16",
+]
 
 [tool.setuptools.packages.find]
 # Without this, setuptools' flat-layout auto-discovery sees both `agent/`

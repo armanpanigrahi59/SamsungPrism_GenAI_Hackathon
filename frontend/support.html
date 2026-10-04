@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Support — PRISM Travel</title>
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+
+  <div class="nav">
+    <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
+    <div class="links">
+      <a href="/flights">Flights</a>
+      <a href="/support" class="active">Support</a>
+      <a href="/how-it-works">How it works</a>
+    </div>
+    <div class="status-pill down" id="connPill"><span class="led"></span><span id="connText">connecting…</span></div>
+  </div>
+
+  <div class="hero">
+    <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
+      <source src="/assets/hero.mp4" type="video/mp4" />
+    </video>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Describe the issue. We'll ask before we guess.</h1>
+      <p>This assistant only has <code>create_support_ticket</code> and <code>lookup_manual</code> loaded — a
+         completely different tool set from the Flights page, fetched fresh from the server the moment this
+         page connects. If a required field can't be confidently extracted, it asks a clarifying question
+         instead of making one up — watch for that in the timeline.</p>
+      <div class="chips">
+        <div class="chip" data-demo="1">▶ Run the clarification demo</div>
+        <div class="chip" data-fill="I need help, my Galaxy Prism screen is not working">Galaxy Prism screen issue</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="shell">
+    <div>
+      <div class="card trip-card">
+        <div class="label-row">
+          <h2>Your ticket, live</h2>
+          <span class="gen-badge" id="genBadge">generation 0</span>
+        </div>
+        <div class="trip-fields" id="fieldsGrid"></div>
+        <div class="intent-line">Understood intent: <b id="intentVal">none yet</b></div>
+      </div>
+
+      <div class="card talk-card">
+        <h2>Describe what's wrong</h2>
+        <p class="hint">Typing streams partial chunks to the agent as you go. Press <b>Enter</b> to end your turn.</p>
+        <textarea id="talk" placeholder="my Galaxy Prism screen is not working"></textarea>
+        <div class="talk-actions">
+          <button class="btn-primary" id="sendBtn">Send turn ↵</button>
+          <button class="btn-interrupt" id="interruptBtn">⏸ Interrupt</button>
+          <button class="btn-ghost" id="resetBtn">New session</button>
+        </div>
+        <div class="footer-stats">
+          <span>Backend: <b id="backendChain">—</b></span>
+          <span>Last turn latency: <b id="latencyVal">—</b></span>
+          <span>Cancelled calls: <b id="cancelCount">0</b></span>
+          <span>Tools loaded: <b>create_support_ticket, lookup_manual</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card timeline-card">
+      <h2>Live agent timeline</h2>
+      <p class="hint">Every tool call, cancellation, clarification and response the agent emits, in order.</p>
+      <div class="timeline" id="timeline">
+        <div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="site-footer">
+    <span>prism-agent — Samsung PRISM Theme 05</span>
+    <span>Note: the bundled regex backend can read a device name but not a repair <em>topic</em> — so this page reliably demonstrates a clarification request rather than always resolving. A real LLM backend (Groq/Ollama) can close that loop.</span>
+  </div>
+
+<script src="/assets/assistant.js"></script>
+<script>
+  PrismAssistant.init({
+    domain: 'support',
+    fields: [
+      { key: 'device_model', label: 'Device' },
+      { key: 'topic', label: 'Topic' },
+      { key: 'issue_summary', label: 'Issue' },
+    ],
+    demoScript: [
+      { text: 'I need help, my Galaxy Prism screen is not working', endOfTurn: true },
+    ],
+  });
+</script>
+</body>
+</html>

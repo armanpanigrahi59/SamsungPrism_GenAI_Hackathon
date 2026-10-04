@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flights — PRISM Travel</title>
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+
+  <div class="nav">
+    <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
+    <div class="links">
+      <a href="/flights" class="active">Flights</a>
+      <a href="/support">Support</a>
+      <a href="/how-it-works">How it works</a>
+    </div>
+    <div class="status-pill down" id="connPill"><span class="led"></span><span id="connText">connecting…</span></div>
+  </div>
+
+  <div class="hero">
+    <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
+      <source src="/assets/hero.mp4" type="video/mp4" />
+    </video>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Tell us where you're flying — even if you change your mind mid-sentence.</h1>
+      <p>This search doesn't wait for you to finish talking. It starts working the moment you start, and throws away
+         guesses the instant you correct yourself — watch the timeline below as you type.</p>
+      <div class="chips">
+        <div class="chip" data-demo="1">▶ Run the barge-in demo</div>
+        <div class="chip" data-fill="book a flight from Delhi to Paris on the 5th">Delhi → Paris</div>
+        <div class="chip" data-fill="book a flight from Mumbai to Nairobi on the 9th">Mumbai → Nairobi</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="shell">
+    <div>
+      <div class="card trip-card">
+        <div class="label-row">
+          <h2>Your trip, live</h2>
+          <span class="gen-badge" id="genBadge">generation 0</span>
+        </div>
+        <div class="trip-fields" id="fieldsGrid"></div>
+        <div class="intent-line">Understood intent: <b id="intentVal">none yet</b></div>
+      </div>
+
+      <div class="card talk-card">
+        <h2>Speak to the assistant</h2>
+        <p class="hint">Typing streams partial chunks to the agent as you go — just like live speech-to-text. Press <b>Enter</b> to end your turn.</p>
+        <textarea id="talk" placeholder="book a flight from Delhi to Paris on the 5th"></textarea>
+        <div class="talk-actions">
+          <button class="btn-primary" id="sendBtn">Send turn ↵</button>
+          <button class="btn-interrupt" id="interruptBtn">⏸ Interrupt</button>
+          <button class="btn-ghost" id="resetBtn">New session</button>
+        </div>
+        <div class="footer-stats">
+          <span>Backend: <b id="backendChain">—</b></span>
+          <span>Last turn latency: <b id="latencyVal">—</b></span>
+          <span>Cancelled calls: <b id="cancelCount">0</b></span>
+          <span>Tools loaded: <b>search_flights, book_flight</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card timeline-card">
+      <h2>Live agent timeline</h2>
+      <p class="hint">Every tool call, cancellation and response the agent emits, in order.</p>
+      <div class="timeline" id="timeline">
+        <div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="site-footer">
+    <span>prism-agent — Samsung PRISM Theme 05</span>
+    <span><a href="/how-it-works">Why interruptions don't lose your place →</a></span>
+  </div>
+
+<script src="/assets/assistant.js"></script>
+<script>
+  PrismAssistant.init({
+    domain: 'flights',
+    fields: [
+      { key: 'origin', label: 'From' },
+      { key: 'destination', label: 'To' },
+      { key: 'date', label: 'Date' },
+    ],
+    demoScript: [
+      { text: 'book a flight from Delhi to Paris on the 5th', endOfTurn: false, waitAfterMs: 500 },
+      { interrupt: true, waitAfterMs: 300 },
+      { text: 'actually from Delhi to Tokyo on the 5th', endOfTurn: true },
+    ],
+  });
+</script>
+</body>
+</html>

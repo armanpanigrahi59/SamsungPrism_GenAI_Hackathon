@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How it works — PRISM Travel</title>
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+
+  <div class="nav">
+    <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
+    <div class="links">
+      <a href="/flights">Flights</a>
+      <a href="/support">Support</a>
+      <a href="/how-it-works" class="active">How it works</a>
+    </div>
+    <a class="nav-cta" href="/flights">Try it live</a>
+  </div>
+
+  <div class="hero compact">
+    <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
+      <source src="/assets/hero.mp4" type="video/mp4" />
+    </video>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Speculate first. Cancel if wrong. Never freeze.</h1>
+      <p>Most agents treat an interruption as cleanup bolted onto a request/response loop. This one flips that:
+         speculating before the user finishes talking is the default, and cancellation is the same mechanism
+         running on almost every turn — not a special case.</p>
+    </div>
+  </div>
+
+  <div class="page">
+    <h2>The one data structure everything hangs off</h2>
+    <p class="lede">
+      <b>SlotState</b> is a session-scoped slot store with a monotonically increasing <code>generation</code>
+      counter. Bump the generation — on an interruption, or a slot correction that disagrees across
+      modalities — and every in-flight call tagged with a stale generation gets cancelled via its own
+      <code>trio.CancelScope</code>. No polling, no manual bookkeeping per call site. The Flights and Support
+      pages on this site are both just different tool manifests pointed at the same engine below.
+    </p>
+
+    <div class="layer-stack">
+      <div class="layer">
+        <div class="layer-num">0</div>
+        <div class="layer-body"><b>Cancellation spine</b><span>SlotState + Coordinator — the generation counter and the dispatch/cancel mechanism every other layer builds on.</span></div>
+      </div>
+      <div class="layer">
+        <div class="layer-num">1</div>
+        <div class="layer-body"><b>Speculative execution</b><span>Fires read-only tool calls before end-of-turn once confidence crosses a threshold, so a correct guess is already resolved by the time you finish speaking.</span></div>
+      </div>
+      <div class="layer">
+        <div class="layer-num">2</div>
+        <div class="layer-body"><b>Salvage cache</b><span>A cancelled call's partial result isn't always wasted — matching stable keys can be served from cache instead of re-fetched.</span></div>
+      </div>
+      <div class="layer">
+        <div class="layer-num">3</div>
+        <div class="layer-body"><b>Belief fusion</b><span>Reconciles text, audio and video observations of the same field; only genuine cross-modality disagreement triggers a clarification.</span></div>
+      </div>
+      <div class="layer">
+        <div class="layer-num">4</div>
+        <div class="layer-body"><b>Schema-driven tools</b><span>Unseen manifest tools still get usable arguments via slot-name matching against the JSON schema — no hardcoding per tool.</span></div>
+      </div>
+    </div>
+
+    <h2>What you're actually watching in the timeline</h2>
+    <p class="lede">Every card in the Flights/Support timeline is a real <code>Action</code> the agent emitted over the WebSocket, not a simulated animation:</p>
+    <div class="grid-3">
+      <div class="feature-card">
+        <div class="icon">⚡</div>
+        <h3>Speculative tool_call</h3>
+        <p>Dispatched before you finish your sentence, tagged with the current generation.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">✕</div>
+        <h3>Cancellation</h3>
+        <p>Fired the instant a stale-generation call is superseded — this is the whole barge-in story, visible.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">?</div>
+        <h3>Clarification</h3>
+        <p>Asked instead of guessed, when a required field genuinely can't be grounded in what was said.</p>
+      </div>
+    </div>
+
+    <h2 style="margin-top:36px">Why a real backend, not a mock</h2>
+    <p class="lede">
+      <code>server/app.py</code> runs a real <code>Agent</code> per browser tab — fresh <code>SlotState</code>,
+      fresh cancellation scopes, same code path as the test suite and <code>demo.py</code>. The Flights page
+      connects with <code>domain: "flights"</code>, the Support page with <code>domain: "support"</code>; the
+      server filters the tool manifest per domain before the agent ever sees it, so each page's agent
+      genuinely only knows about its own tools.
+    </p>
+  </div>
+
+  <div class="site-footer">
+    <span>prism-agent — Samsung PRISM Theme 05</span>
+    <span><a href="/flights">Try it on Flights →</a></span>
+  </div>
+
+</body>
+</html>

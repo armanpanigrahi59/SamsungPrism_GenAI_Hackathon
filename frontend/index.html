@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PRISM Travel — interruptible booking assistant</title>
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+
+  <div class="nav">
+    <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
+    <div class="links">
+      <a href="/flights">Flights</a>
+      <a href="/support">Support</a>
+      <a href="/how-it-works">How it works</a>
+    </div>
+    <a class="nav-cta" href="/flights">Try it live</a>
+  </div>
+
+  <div class="hero">
+    <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
+      <source src="/assets/hero.mp4" type="video/mp4" />
+    </video>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>An assistant that doesn't wait for you to finish talking.</h1>
+      <p>Most booking assistants freeze or restart when you interrupt them. This one speculates the moment you
+         start speaking, and throws away only the guesses you actually corrected — everything else survives.
+         Two live demos below, both wired to the same real backend.</p>
+      <div class="cta-row">
+        <a class="cta primary" href="/flights">✈ Try the flight assistant</a>
+        <a class="cta ghost" href="/support">🛠 Try the support assistant</a>
+      </div>
+      <div class="fine-print">No sign-up. Runs against your own local agent backend.</div>
+    </div>
+  </div>
+
+  <div class="page">
+    <h2>Built for Samsung PRISM Theme 05 — Interruptible Real-Time Agents</h2>
+    <p class="lede">Three pages, one backend. Each live page opens its own WebSocket session with its own
+       fresh agent and its own scoped tool manifest — pick one to see it live, or read how the
+       cancellation mechanism actually works first.</p>
+    <div class="grid-3">
+      <div class="feature-card">
+        <div class="icon">✈</div>
+        <h3>Flights</h3>
+        <p>Book a flight, then barge in mid-search with a correction. Watch the stale search get cancelled
+           and a fresh one dispatched — live.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">🛠</div>
+        <h3>Support</h3>
+        <p>Describe a device issue. A different tool manifest, a different agent session — and a look at
+           how the agent asks instead of guessing when it's genuinely unsure.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">🧠</div>
+        <h3>How it works</h3>
+        <p>The generation-tagged cancellation spine underneath both pages, and what each timeline card
+           actually represents.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="site-footer">
+    <span>prism-agent — Samsung PRISM Theme 05</span>
+    <span><a href="/how-it-works">Read the architecture →</a></span>
+  </div>
+
+</body>
+</html>

@@ -317,6 +317,64 @@ tool call.
 
 ---
 
+## 🖥️ Browser Frontend
+
+`server/app.py` + `frontend/*.html` turn the agent into a live, judge-facing multi-page site —
+not just one demo screen, but genuinely separate pages backed by genuinely separate, domain-scoped
+agent sessions:
+
+| Page | Route | Tools its Agent can see | What it demonstrates |
+|---|---|---|---|
+| Landing | `/` | — (static, no WebSocket) | Entry point, links into the two live pages. |
+| Flights | `/flights` | `search_flights`, `book_flight` | Barge-in: a speculative search gets struck through live the instant a correction cancels it. |
+| Support | `/support` | `create_support_ticket`, `lookup_manual` | Clarification: the agent asks instead of guessing when a required field (`topic`) can't be grounded. |
+| How it works | `/how-it-works` | — (static, no WebSocket) | The Layer 0–4 architecture and what each timeline card actually represents. |
+
+```bash
+pip install -e ".[dev,web]"
+python server/app.py
+# open http://127.0.0.1:8000
+```
+
+**Why Quart-Trio and not Flask/FastAPI:** the entire agent core (`coordinator.py`, `speculation.py`,
+and every NLU provider's HTTP call) runs on trio's structured concurrency — a `trio.CancelScope` per
+in-flight call *is* the interruption mechanism. Quart-Trio runs the WebSocket handler on that same
+trio event loop natively, so there's no asyncio/trio bridge to debug (exactly the mismatch this
+README already flags for the Anthropic SDK's asyncio-based client).
+
+**Protocol** (JSON over one `/ws` WebSocket per browser tab, full docstring in `server/app.py`):
+the first frame a browser sends MUST be `{"type": "init", "domain": "flights" | "support"}` —
+`server/app.py`'s `DOMAIN_TOOLS` filters the manifest *before* the Agent for that session is even
+built, so a Flights tab's agent never receives `create_support_ticket`/`lookup_manual` at all, and
+vice versa. This is real backend scoping, not a frontend-only filter — verified by asserting the
+`manifest` frame's tool list for each domain in a live WebSocket test (not just unit-tested against
+`Agent.run()` directly). After that handshake: browser sends
+`{"type": "text_chunk", "text": "...", "end_of_turn": bool}` (one per partial speech hypothesis —
+the delta since the last send, matching how `main.py` accumulates chunks) or
+`{"type": "interruption"}`; server streams back `{"type": "action", ...}` for every `Action` the
+agent emits, `{"type": "state", "intent", "slots", "generation"}` after each one, and
+`{"type": "nlu_backend", "chain": "..."}` once on connect so the UI shows which backend is actually live.
+
+Each WebSocket connection gets its own fresh `Agent` — two browser tabs never share slot state —
+verified by replaying two concurrent sessions through the live server and confirming neither sees the
+other's slots. `frontend/assets/assistant.js` is one shared client module (WS handling, timeline
+rendering, the live field cards) that every page's inline `<script>` configures with its own
+`domain` + field labels, instead of duplicating ~250 lines of JS per page. Each live page's
+"▶ Run the demo" chip replays a scripted scenario through the real WebSocket path, so there's always
+a one-click, no-typing proof it works end-to-end.
+
+**Serving binary assets correctly.** `/assets/<path:filename>` serves `style.css`/`assistant.js` as
+well as `hero.mp4`/`hero-poster.jpg` from the same route. An early version read every asset with
+`.read_text(encoding="utf-8")`, which is fine for CSS/JS but corrupts (or raises
+`UnicodeDecodeError` on) a binary file -- caught before it shipped by actually requesting `hero.mp4`
+through the route and diffing it byte-for-byte against the source file, not by assuming text-mode
+read was safe for everything. The route now reads every file as bytes and additionally honors HTTP
+`Range` requests (`Accept-Ranges: bytes`, `206 Partial Content`), since Chrome/Safari issue a Range
+request for `<video>` elements and some browsers won't start playback without a 206 response to it --
+verified with a direct `curl -H "Range: bytes=0-999"` against the running server, not assumed.
+
+---
+
 ## 🔌 Extending for the Real Eval Kit
 
 1. Swap [`mock_env.py`](agent/mock_env.py) for the real mock environment once released.
@@ -364,6 +422,18 @@ prism-agent/
 ├── manifests/
 │   └── travel_manifest.json # Tool schemas: search_flights, book_flight, ...
 ├── demo.py                  # Runnable interruption scenario demo
+├── server/
+│   └── app.py               # Quart-Trio WebSocket bridge + page/asset routes, domain-scoped manifest
+├── frontend/
+│   ├── index.html           # Static landing page (no WebSocket)
+│   ├── flights.html         # Live assistant -- search_flights, book_flight only
+│   ├── support.html         # Live assistant -- create_support_ticket, lookup_manual only
+│   ├── how-it-works.html    # Static architecture explainer (no WebSocket)
+│   └── assets/
+│       ├── style.css        # Shared design system for every page
+│       ├── assistant.js     # Shared WS client + timeline/field-card rendering, config per page
+│       ├── hero.mp4         # Looping background video (muted, web-optimized, ~1.6MB)
+│       └── hero-poster.jpg  # First-frame fallback shown before the video decodes
 ├── .env.example             # NLU backend config template (copy to .env, gitignored)
 ├── pyproject.toml           # Project metadata + optional deps
 └── README.md
