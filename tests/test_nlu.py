@@ -25,6 +25,27 @@ async def test_regex_provider_extracts_flight_slots():
     assert result.source == "regex"
 
 
+async def test_regex_provider_extracts_lowercase_slots():
+    """Typing in lowercase is the common case (nobody reliably capitalizes
+    while typing fast) -- an earlier version of the regex required an
+    uppercase first letter and silently extracted nothing for lowercase
+    input, which made the live demo look hardcoded to its one exact
+    example phrase. See agent/nlu.py's _DEST_RE/_ORIGIN_RE comment."""
+    provider = RegexNLUProvider()
+    result = await provider.understand("book a flight from delhi to paris on the 5th")
+    assert result.slots["origin"].value == "delhi"
+    assert result.slots["destination"].value == "paris"
+
+
+async def test_regex_provider_extracts_multiword_city_names():
+    provider = RegexNLUProvider()
+    result = await provider.understand(
+        "book a flight from New York to Los Angeles on the 5th"
+    )
+    assert result.slots["origin"].value == "New York"
+    assert result.slots["destination"].value == "Los Angeles"
+
+
 async def test_regex_provider_falls_back_to_current_intent_on_correction():
     provider = RegexNLUProvider()
     result = await provider.understand("actually to Tokyo", current_intent="book_flight")

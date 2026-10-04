@@ -92,9 +92,16 @@ _INTENT_KEYWORDS = {
     "support_ticket": ["broken", "issue", "not working", "support", "help with my"],
 }
 
-_DEST_RE = re.compile(r"\bto ([A-Z][a-zA-Z]+)\b")
-_ORIGIN_RE = re.compile(r"\bfrom ([A-Z][a-zA-Z]+)\b")
-_DATE_RE = re.compile(r"\bon (the )?(\d{1,2}(st|nd|rd|th)?( of)? ?[A-Za-z]*)\b")
+# Case-insensitive, and the lookahead lets the captured city run across
+# more than one word ("New York", "Los Angeles") instead of stopping at
+# the first word boundary. An earlier version was case-sensitive and
+# single-word-only, so typing in lowercase (the common case -- nobody
+# reliably capitalizes while typing fast) or a two-word city silently
+# extracted nothing, which made the live demo look hardcoded to the two
+# exact example phrases rather than genuinely parsing free text.
+_DEST_RE = re.compile(r"\bto ([A-Za-z][A-Za-z\s]*?)(?=\s+on\b|$)", re.IGNORECASE)
+_ORIGIN_RE = re.compile(r"\bfrom ([A-Za-z][A-Za-z\s]*?)(?=\s+to\b|\s+on\b|$)", re.IGNORECASE)
+_DATE_RE = re.compile(r"\bon (the )?(\d{1,2}(st|nd|rd|th)?( of)? ?[A-Za-z]*)\b", re.IGNORECASE)
 _DEVICE_RE = re.compile(r"\b(Galaxy [A-Za-z0-9]+|Prism ?\w*)\b", re.IGNORECASE)
 
 
