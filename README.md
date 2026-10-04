@@ -39,6 +39,8 @@
 - [🌐 Running the full app: frontend + backend](#-running-the-full-app-frontend--backend)
 - [🎬 The four pages, and what each proves](#-the-four-pages-and-what-each-proves)
 - [🔄 How a request actually flows, end to end](#-how-a-request-actually-flows-end-to-end)
+- [🛡️ Reliability notes (frontend)](#%EF%B8%8F-reliability-notes-frontend)
+- [🚀 Deployment](#-deployment)
 - [🤖 NLU backend configuration](#-nlu-backend-configuration)
 - [🧪 Testing](#-testing)
 - [🔍 Known simplifications](#-known-simplifications)
@@ -222,6 +224,7 @@ prism-agent/
 ├── tests/                         # 47 unit & integration tests across all layers
 ├── demo.py                        # Standalone terminal walkthrough scenario
 ├── .env.example                   # NLU backend template (copy to .env)
+├── Procfile                       # `web: python server/app.py` — for PaaS deploys
 ├── pyproject.toml                 # Package configuration & optional dependency sets
 └── LICENSE                        # MIT License
 ```
@@ -416,6 +419,70 @@ sequenceDiagram
 1. **Mandatory Handshake**: The `init` frame must be the first message transmitted. It ensures the session's `Agent` is bound strictly to the selected domain.
 2. **State Synchronization**: A `{"type":"state", "intent", "slots", "generation"}` packet is dispatched after every action, updating the UI's reactive trip card without client polling.
 3. **HTTP Byte-Range Audio/Video**: `server/app.py` implements RFC-compliant byte-range streaming for `hero.mp4`, enabling seeking and instant video playback.
+
+---
+
+## 🛡️ Reliability notes (frontend)
+
+A few things `frontend/assets/assistant.js` does on purpose, worth knowing before you poke at the
+live pages or build on top of them:
+
+- **Self-healing WebSocket.** If the server restarts or the connection drops, the status pill walks
+  `disconnected` → `reconnecting (n)…` and retries with exponential backoff (1s, 2s, 4s, capped at
+  8s) until it's back — no page refresh required. Each socket carries its own identity, so a late
+  `close` event from an already-superseded connection can't trigger a second, overlapping reconnect
+  loop.
+- **A send that can't go out says so.** Pressing Enter or clicking "Send turn" while the socket
+  isn't open shows an inline hint instead of silently doing nothing, and the typed text stays in the
+  box instead of being discarded.
+
+  > [!NOTE]
+  > An earlier version advanced its internal "already sent" counter even when the underlying
+  > `ws.send()` had silently no-op'd — so text typed during a brief disconnect could be marked as
+  > sent without ever reaching the server. That's what made the page occasionally look unresponsive
+  > with zero error feedback. Fixed by only advancing that counter once a send actually succeeds, and
+  > verified with a Playwright test that kills and restarts the server mid-session.
+
+- **The demo chip can't double-fire.** It disables itself and swaps its label to "⏳ Running…" for
+  the duration of the scripted walkthrough, so a second click can't kick off an overlapping run
+  against the same session.
+- **Input is capped client-side** (`MAX_INPUT_LENGTH` in `assistant.js`, 2000 characters) purely for
+  UX feedback — the actual enforcement is server-side (see `PRISM_MAX_TEXT_LENGTH` below), since a
+  client-side-only cap isn't trustworthy on its own.
+
+---
+
+## 🚀 Deployment
+
+The defaults (`127.0.0.1:8000`, no auth, in-memory per-connection state) are right for local
+development and live demos. `server/app.py` already reads the following environment variables, so
+most of the way to an actual deployment is just setting them:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PORT` / `PRISM_PORT` | `8000` | Port to bind. Most PaaS providers (Render, Railway, Fly, Heroku-style buildpacks) set `PORT` for you automatically. |
+| `PRISM_HOST` | `0.0.0.0` if `PORT` is set, else `127.0.0.1` | Bind address. The default flips automatically so a plain `python server/app.py` on a laptop stays loopback-only, while a `PORT`-driven deploy binds every interface the way platforms expect. |
+| `PRISM_MAX_TEXT_LENGTH` | `2000` | Hard cap, in characters, on one incoming `text_chunk`'s text — enforced server-side regardless of the frontend's own cap, so a client that skips the browser entirely can't send an unbounded payload. |
+| `PRISM_LOG_LEVEL` | `INFO` | Python `logging` level. Every connection logs its own connect/domain/NLU-chain/disconnect, tagged with a short per-connection id. |
+
+A generic deploy (exact UI varies by platform, the shape doesn't):
+
+1. Push this repo to GitHub.
+2. Create a web service from it. Build command: `pip install -e ".[web]"`. Start command (also
+   provided as a `Procfile` for platforms that read one): `python server/app.py`.
+3. Set `PRISM_NLU_BACKEND` and whatever key it needs in the platform's environment-variable UI —
+   never commit real API keys. Leave `PORT`/`PRISM_HOST` alone; the platform sets `PORT` and the
+   default host logic picks that up automatically.
+4. `GET /healthz` returns `{"status": "ok"}` — point the platform's health check at it.
+
+> [!IMPORTANT]
+> **Honest scaling caveat:** each browser tab's `SlotState` and `Agent` live in that one server
+> process's memory for the lifetime of its WebSocket connection — there's no shared store. One
+> process handles many concurrent connections fine (that's exactly what trio's structured
+> concurrency is for), but running more than one process/instance behind a load balancer needs
+> either sticky sessions or moving `SlotState` out to a shared backend (Redis, etc.). That's real
+> follow-up work for a multi-instance deploy, not something to assume away — for a single-instance
+> deploy it doesn't matter at all.
 
 ---
 
