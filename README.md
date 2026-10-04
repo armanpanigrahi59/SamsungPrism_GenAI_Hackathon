@@ -1,151 +1,215 @@
-<h1 align="center">🔮 prism-agent</h1>
+# prism-agent
 
-<p align="center">
-  <strong>An interruptible, full-duplex real-time agent — Samsung PRISM Theme 05</strong>
-</p>
+**An interruptible, full-duplex real-time agent — Samsung PRISM Theme 05.**
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/async-trio-blueviolet" alt="trio">
-  <img src="https://img.shields.io/badge/tests-47%20passed-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/NLU-Groq%20%7C%20Ollama%20%7C%20Claude%20%7C%20Regex-orange" alt="NLU Backends">
-  <img src="https://img.shields.io/badge/frontend-Quart--Trio%20%2B%20WebSocket-informational" alt="Frontend">
-  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
-</p>
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![trio](https://img.shields.io/badge/async-trio-blueviolet) ![tests](https://img.shields.io/badge/tests-47%20passed-brightgreen) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
----
+## Table of Contents
 
-## ✨ What's in this repo
-
-- **The agent engine** (`agent/`) — the actual Theme 05 submission: a trio-native, generation-tagged
-  cancellation spine with speculative execution, salvage caching, multimodal belief fusion, and
-  schema-driven tool use. Runnable headless via [`demo.py`](#-demo-walkthrough) or the
-  [test suite](#-test-suite).
-- **A live, judge-facing web frontend** (`server/` + `frontend/`) — a real 4-page site, backed by a
-  real `Agent` per browser tab over a WebSocket, not a slide or a recorded GIF. See
-  [🖥️ Browser Frontend](#️-browser-frontend) below.
-
-**Jump to:** [Quick Start](#-quick-start) · [Demo Walkthrough](#-demo-walkthrough) ·
-[NLU Backends](#-nlu-backends) · [Browser Frontend](#️-browser-frontend) ·
-[Project Structure](#-project-structure)
+1. [What this project is](#what-this-project-is)
+2. [Architecture](#architecture)
+3. [Repository layout](#repository-layout)
+4. [Setup](#setup)
+5. [Running the backend only (CLI)](#running-the-backend-only-cli)
+6. [Running the full app: frontend + backend](#running-the-full-app-frontend--backend)
+7. [How a request actually flows, end to end](#how-a-request-actually-flows-end-to-end)
+8. [The four pages, and what each proves](#the-four-pages-and-what-each-proves)
+9. [NLU backend configuration](#nlu-backend-configuration)
+10. [Testing](#testing)
+11. [Known simplifications](#known-simplifications)
+12. [License](#license)
 
 ---
 
-## 🧠 The Core Idea
+## What this project is
 
-Most agents treat interruption handling as **reactive cleanup** — a special case bolted onto a normal
-request/response loop. `prism-agent` flips this:
+Most conversational agents treat an interruption as cleanup: the user talks, the agent calls a tool,
+and if the user interrupts mid-call, some special-case code tries to patch things up. This project
+inverts that. **Speculating before the user finishes talking, and cancelling the speculation if it
+turns out wrong, is the default behavior on almost every turn** — not an edge case.
 
-> **Speculate-then-cancel-if-wrong is the *default* operating mode.**
+Everything hangs off one data structure: `SlotState`, a per-session store of extracted slots plus a
+`generation` counter. Every tool call is tagged with the generation that was current when it was
+dispatched. When the user interrupts or corrects themselves, the generation is bumped, and every
+in-flight call still tagged with the old generation is cancelled through its own `trio.CancelScope`.
+That's the whole cancellation mechanism — no polling, no per-call bookkeeping.
 
-As the user is still speaking, the agent predicts likely intent + slots and **starts read-only tool
-calls before end-of-turn**. When the prediction is right, the result is often already in hand — huge
-latency win. When it's wrong, cancellation is not a special case; it's the same mechanism running on
-almost every turn.
+The repo has two halves:
 
-The entire architecture hangs off one data structure: **`SlotState`** — a session-scoped slot store
-with a monotonically increasing `generation` counter. Bump the generation (on an interruption or slot
-correction) and every in-flight call tagged with a stale generation gets cancelled via its own
-`trio.CancelScope`. No polling. No manual bookkeeping per call site.
+- **`agent/`** — the actual submission: the cancellation spine, speculative execution, a salvage
+  cache for cancelled-but-still-useful results, multimodal belief fusion, and schema-driven tool
+  use for tools the agent has never seen before. Runs headless via `demo.py` or the test suite.
+- **`server/` + `frontend/`** — a small web app that puts a real browser UI in front of that same
+  agent, over a WebSocket, so the behavior above can actually be watched happening instead of read
+  about in a trace file.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-```
-User speech (TEXT_CHUNK / AUDIO_CLIP / VIDEO_FRAME)
-        │
-        ▼
- ┌──────────────────────────────────────────────────────────┐
- │  Layer 0 — Cancellation Spine                            │
- │  state.py · coordinator.py · events.py                   │
- │                                                          │
- │  SlotState { slots, generation }                         │
- │  ┌──────────────┐   bump_generation()                    │
- │  │ Fast Path    │ ──────────────────▶ reconcile()        │
- │  │ filler/ack   │                    cancel stale calls  │
- │  └──────────────┘                                        │
- │  ┌──────────────┐   dispatch(tool, args, fn, generation) │
- │  │ Slow Path    │ ──── tagged task in trio nursery ────▶ │
- │  │ tool calls   │                                        │
- │  └──────────────┘                                        │
- └──────────────────────────────────────────────────────────┘
-        │
-        ▼
- ┌─────────────────────┐    ┌──────────────────────────┐
- │  Layer 1            │    │  Layer 3                 │
- │  speculation.py     │    │  belief.py               │
- │                     │    │                          │
- │  Score candidates   │    │  Fuse text/audio/video   │
- │  → dispatch early   │    │  Cross-modal disagreement│
- │    read-only calls  │    │  → clarification request │
- └─────────────────────┘    └──────────────────────────┘
-        │
-        ▼
- ┌─────────────────────┐    ┌──────────────────────────┐
- │  Layer 2            │    │  Layer 4                 │
- │  salvage.py         │    │  tools.py                │
- │                     │    │                          │
- │  Cache results by   │    │  Schema-driven arg       │
- │  stable slot-key    │    │  extraction for ANY      │
- │  Reuse, don't retry │    │  manifest tool           │
- └─────────────────────┘    └──────────────────────────┘
-        │
-        ▼
- ┌──────────────────────────────────────────────────────────┐
- │  NLU  (nlu.py)                                           │
- │  Groq ──▶ Ollama ──▶ Regex   (three-tier fallback chain) │
- │  Intent + slot extraction for any loaded manifest tool   │
- └──────────────────────────────────────────────────────────┘
+### Request lifecycle inside the agent
+
+```mermaid
+flowchart TD
+    IN["Input event: TEXT_CHUNK / AUDIO_CLIP / VIDEO_FRAME"] --> L0
+
+    subgraph L0["Layer 0 — Cancellation spine (state.py, coordinator.py)"]
+        GEN["SlotState: slots + generation counter"]
+        FAST["Fast path: filler / acknowledgement"]
+        SLOW["Slow path: dispatch tool call tagged with current generation"]
+    end
+
+    L0 --> FAST
+    L0 --> SLOW
+
+    SLOW --> L1["Layer 1 — Speculation (speculation.py)\nscores the candidate, fires read-only\ncalls before end-of-turn if confident enough"]
+    L1 --> NLU["NLU provider (nlu.py)\nGroq -> Ollama -> Regex fallback chain"]
+    NLU --> L2["Layer 2 — Salvage cache (salvage.py)\ncache hit? reuse. cache miss? call the tool."]
+    L2 --> ENV["Mock tool environment (mock_env.py)"]
+
+    INT["User interrupts or corrects a slot"] --> BUMP["bump_generation()"]
+    BUMP --> CANCEL["cancel every in-flight call\nstill tagged with the old generation"]
+    CANCEL -.->|stale call torn down via trio.CancelScope| L1
+
+    ENV --> L3["Layer 3 — Belief fusion (belief.py)\ntext / audio / video observations\nof the same field reconciled"]
+    L3 -->|cross-modal disagreement| CLARIFY["Clarification requested"]
+    L3 -->|agreement| L4["Layer 4 — Schema-driven tools (tools.py)\nfills arguments for ANY manifest tool\nby matching slot names to its JSON schema"]
+    L4 --> OUT["Action emitted: tool_call / cancellation /\nclarification / final_response"]
+    CLARIFY --> OUT
 ```
 
-### Layer Reference
+| Layer | File | What it actually does |
+|---|---|---|
+| 0 | `state.py`, `coordinator.py`, `events.py` | Generation-tagged cancellation; idempotency keys so a retried mutating call can't double-book |
+| 1 | `speculation.py` | Scores a partial candidate and speculatively dispatches read-only tool calls before the turn ends |
+| 2 | `salvage.py` | Caches results by a stable slot-key so a cancelled-but-correct call isn't wastefully re-run |
+| 3 | `belief.py` | Fuses text/audio/video beliefs about the same slot; only genuine cross-modal disagreement triggers a clarification |
+| 4 | `tools.py` | Extracts arguments for tools the agent has never hardcoded, purely from the manifest's JSON schema |
+| — | `nlu.py` | Intent + slot extraction: Groq → Ollama → Anthropic → regex, auto-falling back on any failure |
+| — | `protocol.py` | Validates every emitted `Action` payload against its schema before it leaves the agent |
+| — | `mock_env.py` | Deterministic mock tool backends with injectable latency, so timing-dependent behavior is testable |
+| — | `main.py` | `Agent` — wires all of the above into one runnable object |
 
-| Layer | File(s) | Responsibility | Rubric Target |
-|:---:|---|---|---|
-| **0** | `state.py`, `coordinator.py`, `events.py` | Generation-tagged cancellation spine; idempotency keys for mutating calls | Interruption Recovery (35%), Safety (10%) |
-| **1** | `speculation.py` | Speculative dispatch of read-only tool calls before end-of-turn | Response Latency (15%), Interruption Recovery (35%) |
-| **2** | `salvage.py` | Cache partial/completed results by stable slot-key; reuse over re-dispatching | Interruption Recovery (35%), Task Completion (40%) |
-| **3** | `belief.py` | Fuse text/audio/video beliefs; cross-modality disagreement → clarification | Task Completion (40%), multimodal multiplier |
-| **4** | `tools.py` | Schema-driven arg extraction for never-before-seen manifest tools | Task Completion (40%) — unseen-tool scenarios |
-| **—** | `nlu.py` | LLM-backed intent/slot extraction (Groq/Ollama/Claude) + regex fallback | Task Completion (40%) — real language understanding |
-| **—** | `protocol.py` | JSON-schema validation on every emitted action | Safety & Protocol (10%) |
-| **—** | `mock_env.py` | Deterministic mock backends with injectable latency/faults | Mirrors eval kit mock environment |
-| **—** | `harness.py` | Virtual-clock scenario replay + trace logging | Mirrors eval kit streaming harness |
-| **—** | `main.py` | Wires all layers into a runnable `Agent` | — |
+### Frontend ↔ backend component map
 
-> Layer 0 alone already scores on Interruption Recovery + Safety. Each subsequent layer is **purely additive**.
+```mermaid
+flowchart LR
+    subgraph Browser
+        P1["index.html\n(static landing)"]
+        P2["flights.html"]
+        P3["support.html"]
+        P4["how-it-works.html\n(static)"]
+        JS["assistant.js\nshared WebSocket client"]
+    end
+
+    subgraph Server["server/app.py (Quart-Trio)"]
+        ROUTES["Page + /assets routes"]
+        WS["/ws WebSocket endpoint"]
+        FILTER["DOMAIN_TOOLS filter\napplied BEFORE the Agent is built"]
+    end
+
+    subgraph Core["agent/ (the real engine, unmodified)"]
+        AGENT["Agent"]
+        REG["ToolRegistry"]
+        ENV2["MockToolEnvironment"]
+    end
+
+    P2 -- "new WebSocket, domain='flights'" --> WS
+    P3 -- "new WebSocket, domain='support'" --> WS
+    JS --- P2
+    JS --- P3
+    ROUTES -. "serves" .-> P1
+    ROUTES -. "serves" .-> P4
+    WS --> FILTER --> AGENT
+    AGENT --> REG
+    AGENT --> ENV2
+```
+
+The important detail: `FILTER` runs **before** the `Agent` object for that browser tab is even
+constructed. A Flights tab's agent is handed a manifest that physically does not contain
+`create_support_ticket` or `lookup_manual` — it isn't that the frontend hides those tools, the
+backend never gave that session's agent the capability to use them. Every browser tab also gets its
+own fresh `Agent` and its own fresh `SlotState`, so two tabs never see each other's slots.
 
 ---
 
-## 🚀 Quick Start
+## Repository layout
 
-### 1. Install
+```
+prism-agent/
+├── agent/                   # the submission — all five layers + NLU + protocol
+│   ├── main.py               Agent — wires every layer together
+│   ├── state.py               SlotState + generation counter        (Layer 0)
+│   ├── coordinator.py         fast/slow path dispatch + cancellation  (Layer 0)
+│   ├── speculation.py         speculative dispatch engine             (Layer 1)
+│   ├── salvage.py             partial-result cache                   (Layer 2)
+│   ├── belief.py              multimodal belief fusion                (Layer 3)
+│   ├── tools.py               schema-driven tool registry             (Layer 4)
+│   ├── nlu.py                 Groq / Ollama / Anthropic / regex providers
+│   ├── asr.py                 optional local Whisper speech-to-text
+│   ├── protocol.py            validates every Action payload
+│   ├── mock_env.py            mock tool backends (flights, support)
+│   ├── harness.py             virtual-clock scenario replay
+│   └── events.py, trace.py
+├── tests/                    # 47 tests, one file per layer + NLU plumbing
+├── manifests/
+│   └── travel_manifest.json  tool schemas: search_flights, book_flight,
+│                              create_support_ticket, lookup_manual
+├── demo.py                   runnable CLI interruption scenario
+├── server/
+│   └── app.py                Quart-Trio WebSocket bridge + page/asset routes
+├── frontend/
+│   ├── index.html             landing page (no WebSocket)
+│   ├── flights.html           live agent — search_flights / book_flight only
+│   ├── support.html           live agent — create_support_ticket / lookup_manual only
+│   ├── how-it-works.html      static architecture explainer
+│   └── assets/
+│       ├── style.css          shared design system
+│       ├── assistant.js       shared WebSocket client + UI rendering
+│       ├── hero.mp4           background video
+│       └── hero-poster.jpg    poster frame shown before the video decodes
+├── .env.example               NLU backend config template — copy to .env
+├── pyproject.toml
+└── LICENSE
+```
+
+---
+
+## Setup
+
+Requires Python 3.10, 3.11, or 3.12.
 
 ```bash
-pip install -e ".[dev]"            # base deps + pytest (trio, jsonschema)
-pip install -e ".[dev,llm]"        # + Anthropic Claude support
-pip install -e ".[dev,local]"      # + faster-whisper (local ASR)
-pip install -e ".[dev,llm,local]"  # everything
+# 1. clone / open the project, then install the base package + dev deps
+pip install -e ".[dev]"
+
+# 2. (optional) add whichever extras you actually need:
+pip install -e ".[dev,web]"        # the browser frontend (Quart-Trio)
+pip install -e ".[dev,llm]"        # Anthropic Claude as an NLU backend
+pip install -e ".[dev,local]"      # local Whisper speech-to-text
+pip install -e ".[dev,web,llm,local]"   # everything
 ```
 
-### 2. Configure NLU Backend
-
-`.env` itself is gitignored (it's where your real API keys go) and is **not** shipped in the repo.
-Copy the template first, then fill in your keys:
+Then set up your `.env` — it's gitignored on purpose (it holds API keys), so it's never committed;
+copy the template and edit it:
 
 ```powershell
 # PowerShell
 Copy-Item .env.example .env
-notepad .env   # set GROQ_API_KEY, confirm PRISM_NLU_BACKEND=groq+ollama
+notepad .env
 ```
 
 ```bash
 # bash / zsh
 cp .env.example .env
+$EDITOR .env
 ```
 
-Then load it into your shell:
+`.env` only matters if you want an LLM-backed NLU provider (see
+[NLU backend configuration](#nlu-backend-configuration)). With no `.env` at all, the agent still
+runs — it just falls back to the free, dependency-free regex provider.
+
+If you *are* using `.env`, load it into your shell before running anything:
 
 ```powershell
 # PowerShell
@@ -158,307 +222,196 @@ Get-Content .env | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '=' } |
 set -a && source .env && set +a
 ```
 
-### 3. Run
+---
+
+## Running the backend only (CLI)
+
+No browser, no server — just the agent reading a scripted scenario and printing its trace:
 
 ```bash
-python demo.py              # interruption scenario → prints trace
-python -m pytest tests/ -v  # 47 tests across all layers
+python demo.py
+```
+
+This streams a realistic "book a flight, then interrupt and correct it" scenario through the agent
+and prints exactly what layer 0 does: a speculative call dispatched, cancelled on interruption, and
+a clarification asked for the fields that are still missing. The full structured trace is also
+written to `last_run_trace.json`.
+
+Run the test suite the same way:
+
+```bash
+python -m pytest tests/ -v
 ```
 
 ---
 
-## 🎬 Demo Walkthrough
+## Running the full app: frontend + backend
 
-`demo.py` streams a realistic interruption scenario through the agent:
+```bash
+pip install -e ".[dev,web]"    # if you haven't already
+python server/app.py
+```
+
+You'll see:
 
 ```
-=== Scenario: booking a flight, then barging in with a correction ===
-
-> user: "book a flight from Delhi to Paris on the 5th"
-  [    tool_call] nlu_extract dispatched speculatively  (gen=0)
-
-> user interrupts: "actually..."
-> user: "...from Delhi to Tokyo on the 5th"
-
-  [ cancellation] nlu_extract cancelled  (stale gen=0 → current gen=1)
-  [      filler] "Go ahead, I'm listening."
-  [clarification] "I still need: origin, destination, date."
-
-=== Final slot state ===
-{ "intent": "search_flights", "slots": {}, "generation": 1 }
-
-=== Score-relevant checks ===
-Stale calls cancelled            : 1
-Duplicate state-changing calls   : 0  (idempotency guard working)
-Salvage cache stats              : { hits: 0, misses: 0 }
-
-Full trace written to last_run_trace.json
+prism-agent web bridge -> http://127.0.0.1:8000  (Ctrl+C to stop)
 ```
+
+Open that URL in a browser. That's it — `server/app.py` serves the HTML pages, the CSS/JS/video
+assets, and the WebSocket endpoint all from one process; there's nothing else to start.
+
+From there:
+
+- `/` — the landing page, links into the two live demos below.
+- `/flights` — type a request (e.g. *"book a flight from Delhi to Paris on the 5th"*), then
+  interrupt it mid-search and correct the destination. Watch the timeline show the first search
+  getting cancelled the instant the correction lands.
+- `/support` — describe a device problem. The bundled regex NLU backend can pull out a device name
+  but not a repair *topic*, so this reliably demonstrates the agent asking a clarifying question
+  instead of guessing. Swap in Groq/Ollama (below) to see it resolve in one turn instead.
+- `/how-it-works` — a static page explaining the five layers, for anyone who lands on the site
+  without reading this README first.
+
+Each live page also has a "▶ Run the demo" chip that replays a scripted scenario through the real
+WebSocket connection — a one-click way to see the behavior without typing anything.
 
 ---
 
-## 🤖 NLU Backends
+## How a request actually flows, end to end
 
-By default the agent uses `RegexNLUProvider` — fast, free, zero dependencies, but only knows two
-hardcoded intents. Upgrade via `PRISM_NLU_BACKEND`:
+This is what happens, in order, the moment you type into the Flights page and then interrupt
+yourself — tracing the exact frames `server/app.py` and `assistant.js` send each other:
 
-| Backend | Cost | Setup | Quality |
+```mermaid
+sequenceDiagram
+    participant You as You (typing)
+    participant Browser as Browser (assistant.js)
+    participant Server as server/app.py
+    participant Agent as Agent (agent/main.py)
+    participant NLU as NLU provider
+    participant Tool as Mock tool
+
+    Browser->>Server: open WebSocket, {"type":"init","domain":"flights"}
+    Server->>Server: filter manifest to search_flights + book_flight only
+    Server->>Browser: {"type":"nlu_backend","chain":"..."}
+    Server->>Browser: {"type":"manifest","tools":[...]}
+
+    You->>Browser: "book a flight from Delhi to Paris on the 5th"
+    Browser->>Server: {"type":"text_chunk","text":"...","end_of_turn":false}
+    Server->>Agent: InputEvent(TEXT_CHUNK)
+    Agent->>NLU: extract intent + slots from partial text
+    NLU-->>Agent: intent=search_flights, slots={origin, destination, date}
+    Agent->>Tool: speculative search_flights(), tagged generation=0
+    Agent-->>Server: Action(tool_call)
+    Server-->>Browser: {"type":"action","action":"tool_call",...}
+
+    You->>Browser: interrupts
+    Browser->>Server: {"type":"interruption"}
+    Server->>Agent: InputEvent(INTERRUPTION)
+    Agent->>Agent: bump_generation() to 1, cancel the generation=0 call
+    Agent-->>Server: Action(cancellation)
+    Server-->>Browser: {"type":"action","action":"cancellation",...}
+
+    You->>Browser: "...actually from Delhi to Tokyo on the 5th", end of turn
+    Browser->>Server: {"type":"text_chunk","text":"...","end_of_turn":true}
+    Server->>Agent: InputEvent(TEXT_CHUNK, end_of_turn)
+    Agent->>NLU: extract from full corrected text
+    Agent->>Tool: search_flights(), tagged generation=1
+    Tool-->>Agent: flight offers
+    Agent-->>Server: Action(final_response)
+    Server-->>Browser: {"type":"action","action":"final_response",...}
+    Browser->>You: renders the result + updated timeline
+```
+
+A few details that matter if you're reading `server/app.py` alongside this:
+
+- The `init` frame **must** be the first thing sent on the socket — it's what decides which tools
+  this session's `Agent` is even built with. `assistant.js` sends it automatically on connect.
+- `{"type":"state", "intent", "slots", "generation"}` is sent after every single action, which is
+  how the "Your trip, live" card on the page stays in sync without polling.
+- `/assets/<path:filename>` serves `style.css` and `assistant.js` as well as `hero.mp4` — all as
+  raw bytes, with HTTP Range support, so the background video can actually stream and seek in the
+  browser instead of only working for text assets.
+
+---
+
+## The four pages, and what each proves
+
+| Page | Route | Tools its `Agent` can see | What it's actually demonstrating |
+|---|---|---|---|
+| Landing | `/` | none (static) | Entry point, no backend claims made that aren't shown live elsewhere |
+| Flights | `/flights` | `search_flights`, `book_flight` | Barge-in: a speculative call struck through live the instant a correction cancels it |
+| Support | `/support` | `create_support_ticket`, `lookup_manual` | Clarification: the agent asks instead of guessing when a required field can't be grounded |
+| How it works | `/how-it-works` | none (static) | The architecture above, written for a reader instead of a diagram |
+
+---
+
+## NLU backend configuration
+
+The default `RegexNLUProvider` needs no setup and no network access, but only recognizes two
+hardcoded intents via keyword matching. Set `PRISM_NLU_BACKEND` in `.env` to upgrade:
+
+| Value | Cost | What you need | Behavior |
 |---|:---:|---|---|
-| `regex` *(default)* | Free | None | Keyword-match only, 2 hardcoded intents |
-| `groq` | **Free** cloud | `GROQ_API_KEY=gsk_...` — [console.groq.com](https://console.groq.com), no card | Any manifest tool; fast Llama 3; stdlib `urllib` only |
-| `ollama` | **Free**, local | Ollama installed + `ollama pull llama3.2:3b` | Any manifest tool; fully offline |
-| `groq+ollama` ⭐ | **Free** | Both above | **3-tier chain:** Groq → Ollama → Regex. Always live. |
-| `ollama+groq` | **Free** | Both above | Local-first: Ollama → Groq → Regex |
-| `anthropic` | Paid | `ANTHROPIC_API_KEY=sk-ant-...` | Most reliable; auto-selected if key set |
+| `regex` *(default)* | free | nothing | Keyword matching, 2 hardcoded intents |
+| `groq` | free | `GROQ_API_KEY` from [console.groq.com](https://console.groq.com), no card required | Understands any manifest tool via Llama 3 on Groq's API |
+| `ollama` | free, local | [Ollama](https://ollama.com) installed + `ollama pull llama3.2:3b` | Same, fully offline |
+| `groq+ollama` | free | both of the above | 3-tier chain: Groq → Ollama → regex. Recommended. |
+| `ollama+groq` | free | both of the above | Same chain, local-first |
+| `anthropic` | paid | `ANTHROPIC_API_KEY` | Most reliable; used automatically if the key is set |
 
-All LLM backends receive tool names/descriptions/schemas from the loaded manifest — **they generalize
-to any tool**, not just the two hardcoded travel/support ones. All degrade to regex automatically on
-any failure via `FallbackNLUProvider`.
+All LLM backends read tool names, descriptions and schemas straight from the loaded manifest, so
+they generalize to any tool — not just the two built in here — and every one of them degrades to
+regex automatically if the call fails, via `FallbackNLUProvider`.
 
-### Model Overrides
+Other relevant variables: `PRISM_GROQ_MODEL` (default `llama-3.1-8b-instant`),
+`PRISM_OLLAMA_MODEL` (default `llama3.2:3b`), `OLLAMA_HOST` (default `http://localhost:11434`),
+`PRISM_NLU_MODEL` (default `claude-3-5-sonnet-latest`).
 
-| Env Var | Default | Backend |
-|---|---|---|
-| `PRISM_NLU_BACKEND` | *(regex)* | Selects backend |
-| `GROQ_API_KEY` | — | Required for Groq |
-| `PRISM_GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model |
-| `PRISM_OLLAMA_MODEL` | `llama3.2:3b` | Ollama model |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_MODELS` | `~/.ollama/models` | Ollama model storage path |
-| `ANTHROPIC_API_KEY` | — | Required for Anthropic |
-| `PRISM_NLU_MODEL` | `claude-3-5-sonnet-latest` | Anthropic model |
-
-### Starting Ollama on Windows
+Starting Ollama on Windows, if your models need to live on a drive other than `C:`:
 
 ```powershell
-# Start the server with models on D: (if C: is full):
 $env:OLLAMA_MODELS = "D:\ollama-models"
 Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" -ArgumentList "serve"
-
-# Pull the model (one-time):
 & "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull llama3.2:3b
 ```
 
 ---
 
-## 🏙️ Local ASR (Speech-to-Text)
-
-`AUDIO_CLIP` events work two ways:
-
-- **Pre-supplied `transcript`** in the payload → used directly, zero extra setup (backward compatible with all tests)
-- **`audio_path`** (WAV file path) in the payload → transcribed locally via `faster-whisper`
-
-```bash
-pip install -e ".[local]"          # installs faster-whisper
-export PRISM_ASR_BACKEND=whisper
-# optional: export PRISM_WHISPER_MODEL=tiny   (default: "base")
-```
-
-First use downloads model weights once, then caches locally. See [`asr.py`](agent/asr.py) for the full contract.
-
----
-
-## 🔬 Test Suite
+## Testing
 
 ```
 tests/
-├── test_asr.py                      # LocalWhisperASR contract (monkeypatched)
-├── test_end_to_end_interruption.py  # Full agent: interrupt mid-flight call
-├── test_layer0_cancellation.py      # Generation-tagged cancellation spine
-├── test_layer1_speculation.py       # Speculative dispatch + threshold
-├── test_layer2_salvage.py           # Partial-result cache reuse
-├── test_layer3_belief.py            # Cross-modality disagreement → clarification
-├── test_layer4_unseen_tools.py      # Schema-driven arg extraction, novel tools
-├── test_nlu.py                      # Regex provider + FallbackNLUProvider
-├── test_nlu_anthropic_plumbing.py   # Anthropic plumbing (mocked)
-├── test_nlu_groq_plumbing.py        # Groq plumbing (mocked)
-└── test_nlu_ollama_plumbing.py      # Ollama plumbing (mocked)
+├── test_layer0_cancellation.py      generation-tagged cancellation spine
+├── test_layer1_speculation.py       speculative dispatch + confidence threshold
+├── test_layer2_salvage.py           partial-result cache reuse
+├── test_layer3_belief.py            cross-modality disagreement -> clarification
+├── test_layer4_unseen_tools.py      schema-driven arg extraction for novel tools
+├── test_end_to_end_interruption.py  the full agent, interrupted mid-call
+├── test_nlu.py                      regex provider + fallback chain
+├── test_nlu_groq_plumbing.py        Groq provider (mocked HTTP)
+├── test_nlu_ollama_plumbing.py      Ollama provider (mocked HTTP)
+├── test_nlu_anthropic_plumbing.py   Anthropic provider (mocked)
+└── test_asr.py                      local Whisper ASR contract (mocked)
 ```
 
 ```
-47 passed in 3.31s  ✅
+python -m pytest tests/ -v
+# 47 passed
 ```
 
 ---
 
-## 🧩 Design Decisions
+## Known simplifications
 
-<details>
-<summary><strong>Why speculate on every confident partial fill, not just explicit interruption scenarios?</strong></summary>
-
-The hidden eval set is ~60 scenarios testing "edge cases and adversarial timing." A system that only
-exercises its cancellation path on scenarios explicitly tagged "interruption" has an undertested
-cancellation path. Making speculation the default means the cancellation logic gets exercised on nearly
-every scenario — public or hidden.
-</details>
-
-<details>
-<summary><strong>Why never speculate on mutating tools?</strong></summary>
-
-`book_flight` / `create_support_ticket` are effectively irreversible and idempotency-keyed on
-`(tool, args, generation)`. Speculating on them risks either (a) a duplicate booking if a speculative
-and "real" call race, or (b) a complex cancellation-before-side-effect protocol with little added
-benefit. Read-only speculation gets ~90% of the latency win for ~10% of the risk.
-</details>
-
-<details>
-<summary><strong>Why is cross-modality disagreement the clarification trigger, not same-modality updates?</strong></summary>
-
-A same-modality update (user restates a value, self-corrects in the same text stream) is a normal slot
-correction — objective #3 explicitly asks these to be *applied*, not flagged. Only *disagreeing*
-modalities (audio heard one thing, video grounded another) represent genuine perceptual ambiguity per
-objective #5.
-</details>
-
-<details>
-<summary><strong>Trio + blocking SDKs: how are they bridged?</strong></summary>
-
-The official `anthropic` SDK's async client is built on `asyncio` — incompatible with trio's event
-loop. `nlu.py` uses the *synchronous* Anthropic client (and `stdlib urllib` for Groq/Ollama) inside
-`trio.to_thread.run_sync`. This keeps trio's event loop unblocked while the HTTP call runs in a worker
-thread. LLM extraction on partial text is dispatched through the same generation-tagged cancellable
-mechanism as tool calls — a stale LLM call for superseded text gets cancelled exactly like a stale
-tool call.
-</details>
-
----
-
-## ⚠️ Known Simplifications
-
-| Limitation | Status |
+| Limitation | Current state |
 |---|---|
-| Vision / frame grounding | `VIDEO_FRAME` assumes `grounded_field`/`grounded_value` is already extracted. `belief.py` fusion logic is real and tested — only the frame-captioning step is stubbed. |
-| Real WAV ASR | `LocalWhisperASR` is wired and works, but not validated against a real audio clip. Pre-supplied `transcript` still works as before. |
-| Eval kit | Built and tested against a self-authored mock environment (`mock_env.py`) with the same shape as the real kit. |
-| Confidence scorer | `score_candidate` in `speculation.py` is a simple completeness/turn-progress blend, not a learned model. |
+| Vision / frame grounding | `VIDEO_FRAME` events assume `grounded_field`/`grounded_value` are already extracted — the fusion logic in `belief.py` is real and tested, only the upstream captioning step is stubbed |
+| Real WAV transcription | `LocalWhisperASR` is implemented and wired, but not yet validated against a real audio file end to end |
+| Tool environment | Tested against a self-authored mock (`mock_env.py`) matching the real eval kit's shape, not the real kit itself |
+| Confidence scoring | `score_candidate` in `speculation.py` is a simple completeness/progress heuristic, not a learned model |
 
----
+## License
 
-## 🖥️ Browser Frontend
-
-`server/app.py` + `frontend/*.html` turn the agent into a live, judge-facing multi-page site —
-not just one demo screen, but genuinely separate pages backed by genuinely separate, domain-scoped
-agent sessions:
-
-| Page | Route | Tools its Agent can see | What it demonstrates |
-|---|---|---|---|
-| Landing | `/` | — (static, no WebSocket) | Entry point, links into the two live pages. |
-| Flights | `/flights` | `search_flights`, `book_flight` | Barge-in: a speculative search gets struck through live the instant a correction cancels it. |
-| Support | `/support` | `create_support_ticket`, `lookup_manual` | Clarification: the agent asks instead of guessing when a required field (`topic`) can't be grounded. |
-| How it works | `/how-it-works` | — (static, no WebSocket) | The Layer 0–4 architecture and what each timeline card actually represents. |
-
-```bash
-pip install -e ".[dev,web]"
-python server/app.py
-# open http://127.0.0.1:8000
-```
-
-**Why Quart-Trio and not Flask/FastAPI:** the entire agent core (`coordinator.py`, `speculation.py`,
-and every NLU provider's HTTP call) runs on trio's structured concurrency — a `trio.CancelScope` per
-in-flight call *is* the interruption mechanism. Quart-Trio runs the WebSocket handler on that same
-trio event loop natively, so there's no asyncio/trio bridge to debug (exactly the mismatch this
-README already flags for the Anthropic SDK's asyncio-based client).
-
-**Protocol** (JSON over one `/ws` WebSocket per browser tab, full docstring in `server/app.py`):
-the first frame a browser sends MUST be `{"type": "init", "domain": "flights" | "support"}` —
-`server/app.py`'s `DOMAIN_TOOLS` filters the manifest *before* the Agent for that session is even
-built, so a Flights tab's agent never receives `create_support_ticket`/`lookup_manual` at all, and
-vice versa. This is real backend scoping, not a frontend-only filter — verified by asserting the
-`manifest` frame's tool list for each domain in a live WebSocket test (not just unit-tested against
-`Agent.run()` directly). After that handshake: browser sends
-`{"type": "text_chunk", "text": "...", "end_of_turn": bool}` (one per partial speech hypothesis —
-the delta since the last send, matching how `main.py` accumulates chunks) or
-`{"type": "interruption"}`; server streams back `{"type": "action", ...}` for every `Action` the
-agent emits, `{"type": "state", "intent", "slots", "generation"}` after each one, and
-`{"type": "nlu_backend", "chain": "..."}` once on connect so the UI shows which backend is actually live.
-
-Each WebSocket connection gets its own fresh `Agent` — two browser tabs never share slot state —
-verified by replaying two concurrent sessions through the live server and confirming neither sees the
-other's slots. `frontend/assets/assistant.js` is one shared client module (WS handling, timeline
-rendering, the live field cards) that every page's inline `<script>` configures with its own
-`domain` + field labels, instead of duplicating ~250 lines of JS per page. Each live page's
-"▶ Run the demo" chip replays a scripted scenario through the real WebSocket path, so there's always
-a one-click, no-typing proof it works end-to-end.
-
-**Serving binary assets correctly.** `/assets/<path:filename>` serves `style.css`/`assistant.js` as
-well as `hero.mp4`/`hero-poster.jpg` from the same route. An early version read every asset with
-`.read_text(encoding="utf-8")`, which is fine for CSS/JS but corrupts (or raises
-`UnicodeDecodeError` on) a binary file -- caught before it shipped by actually requesting `hero.mp4`
-through the route and diffing it byte-for-byte against the source file, not by assuming text-mode
-read was safe for everything. The route now reads every file as bytes and additionally honors HTTP
-`Range` requests (`Accept-Ranges: bytes`, `206 Partial Content`), since Chrome/Safari issue a Range
-request for `<video>` elements and some browsers won't start playback without a 206 response to it --
-verified with a direct `curl -H "Range: bytes=0-999"` against the running server, not assumed.
-
----
-
-## 🔌 Extending for the Real Eval Kit
-
-1. Swap [`mock_env.py`](agent/mock_env.py) for the real mock environment once released.
-2. Point `tools.py → load_manifest()` at the real scenario manifests.
-3. Wire a real vision model (Gemini multimodal, or a local captioning model) to populate `VIDEO_FRAME`'s
-   `grounded_field`/`grounded_value` — [`events.py`](agent/events.py) already matches the theme
-   guide's §3.1 interface contract.
-4. [`harness.py`](agent/harness.py) is ready to replay the public test suite's canonical scenarios once
-   they're in `InputEvent` shape.
-5. Verify each backend end-to-end:
-   ```bash
-   PRISM_NLU_BACKEND=groq+ollama python demo.py
-   # check last_run_trace.json for "source": "groq" or "source": "ollama"
-
-   PRISM_NLU_BACKEND=ollama python demo.py
-   # confirm ollama serve is running with OLLAMA_MODELS set
-
-   PRISM_ASR_BACKEND=whisper python demo.py
-   # pass an AUDIO_CLIP event with a real audio_path
-   ```
-
----
-
-## 📂 Project Structure
-
-```
-prism-agent/
-├── agent/
-│   ├── __init__.py          # Package entry + architecture overview
-│   ├── main.py              # Agent class — wires all layers together
-│   ├── events.py            # InputEvent / Action types (Layer 0)
-│   ├── state.py             # SlotState + generation counter (Layer 0)
-│   ├── coordinator.py       # Fast/slow path + cancellation (Layer 0)
-│   ├── speculation.py       # Speculative dispatch engine (Layer 1)
-│   ├── salvage.py           # Partial-result cache (Layer 2)
-│   ├── belief.py            # Multimodal belief fusion (Layer 3)
-│   ├── tools.py             # Schema-driven tool registry (Layer 4)
-│   ├── nlu.py               # NLU providers: Groq, Ollama, Anthropic, Regex
-│   ├── asr.py               # Local Whisper ASR (optional)
-│   ├── protocol.py          # Action payload validation
-│   ├── mock_env.py          # Mock tool backends (flight, booking, support)
-│   ├── harness.py           # Virtual-clock scenario replay
-│   └── trace.py             # Trace logger
-├── tests/                   # 47 unit + integration tests
-├── manifests/
-│   └── travel_manifest.json # Tool schemas: search_flights, book_flight, ...
-├── demo.py                  # Runnable interruption scenario demo
-├── server/
-│   └── app.py               # Quart-Trio WebSocket bridge + page/asset routes, domain-scoped manifest
-├── frontend/
-│   ├── index.html           # Static landing page (no WebSocket)
-│   ├── flights.html         # Live assistant -- search_flights, book_flight only
-│   ├── support.html         # Live assistant -- create_support_ticket, lookup_manual only
-│   ├── how-it-works.html    # Static architecture explainer (no WebSocket)
-│   └── assets/
-│       ├── style.css        # Shared design system for every page
-│       ├── assistant.js     # Shared WS client + timeline/field-card rendering, config per page
-│       ├── hero.mp4         # Looping background video (muted, web-optimized, ~1.6MB)
-│       └── hero-poster.jpg  # First-frame fallback shown before the video decodes
-├── .env.example             # NLU backend config template (copy to .env, gitignored)
-├── pyproject.toml           # Project metadata + optional deps
-└── README.md
-```
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE) for details.
-
+MIT — see [LICENSE](LICENSE).
