@@ -114,7 +114,21 @@ pip install -e ".[dev,llm,local]"  # everything
 
 ### 2. Configure NLU Backend
 
-Source the included `.env` — it ships pre-configured with `groq+ollama`:
+`.env` itself is gitignored (it's where your real API keys go) and is **not** shipped in the repo.
+Copy the template first, then fill in your keys:
+
+```powershell
+# PowerShell
+Copy-Item .env.example .env
+notepad .env   # set GROQ_API_KEY, confirm PRISM_NLU_BACKEND=groq+ollama
+```
+
+```bash
+# bash / zsh
+cp .env.example .env
+```
+
+Then load it into your shell:
 
 ```powershell
 # PowerShell
@@ -350,7 +364,7 @@ prism-agent/
 ├── manifests/
 │   └── travel_manifest.json # Tool schemas: search_flights, book_flight, ...
 ├── demo.py                  # Runnable interruption scenario demo
-├── .env                     # Pre-configured NLU backend settings
+├── .env.example             # NLU backend config template (copy to .env, gitignored)
 ├── pyproject.toml           # Project metadata + optional deps
 └── README.md
 ```
