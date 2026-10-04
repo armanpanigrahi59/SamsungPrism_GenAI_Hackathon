@@ -9,8 +9,25 @@
   <img src="https://img.shields.io/badge/async-trio-blueviolet" alt="trio">
   <img src="https://img.shields.io/badge/tests-47%20passed-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/NLU-Groq%20%7C%20Ollama%20%7C%20Claude%20%7C%20Regex-orange" alt="NLU Backends">
+  <img src="https://img.shields.io/badge/frontend-Quart--Trio%20%2B%20WebSocket-informational" alt="Frontend">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
 </p>
+
+---
+
+## ✨ What's in this repo
+
+- **The agent engine** (`agent/`) — the actual Theme 05 submission: a trio-native, generation-tagged
+  cancellation spine with speculative execution, salvage caching, multimodal belief fusion, and
+  schema-driven tool use. Runnable headless via [`demo.py`](#-demo-walkthrough) or the
+  [test suite](#-test-suite).
+- **A live, judge-facing web frontend** (`server/` + `frontend/`) — a real 4-page site, backed by a
+  real `Agent` per browser tab over a WebSocket, not a slide or a recorded GIF. See
+  [🖥️ Browser Frontend](#️-browser-frontend) below.
+
+**Jump to:** [Quick Start](#-quick-start) · [Demo Walkthrough](#-demo-walkthrough) ·
+[NLU Backends](#-nlu-backends) · [Browser Frontend](#️-browser-frontend) ·
+[Project Structure](#-project-structure)
 
 ---
 
@@ -444,3 +461,4 @@ prism-agent/
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE) for details.
+
