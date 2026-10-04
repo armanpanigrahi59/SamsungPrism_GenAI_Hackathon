@@ -68,7 +68,10 @@ def record():
         # -------------------------------------------------------------
         print("2. Visiting Flights Page...")
         page.click("a[href='/flights']")
-        page.wait_for_selector("#connPill.up", timeout=8000)
+        try:
+            page.wait_for_selector("#connPill.live", timeout=6000)
+        except Exception:
+            time.sleep(2)
         time.sleep(2)
 
         # Click the barge-in demo chip
@@ -99,8 +102,14 @@ def record():
             select_btns.first.click()
             time.sleep(2)
 
-            # Confirm booking
-            book_btn = page.locator("#confirmBookBtn")
+            # Fill in passenger name and confirm booking
+            pax_input = page.locator("input[data-pax-name='0']")
+            if pax_input.is_visible():
+                print("Entering passenger name...")
+                pax_input.fill("Alice Smith")
+                time.sleep(1)
+
+            book_btn = page.locator("button[data-book='1']")
             if book_btn.is_visible():
                 print("Confirming booking...")
                 book_btn.click()
@@ -159,7 +168,10 @@ def record():
         # -------------------------------------------------------------
         print("4. Visiting Support Page...")
         page.click("a[href='/support']")
-        page.wait_for_selector("#connPill.up", timeout=8000)
+        try:
+            page.wait_for_selector("#connPill.live", timeout=6000)
+        except Exception:
+            time.sleep(2)
         time.sleep(2)
 
         # Run clarification demo
@@ -239,6 +251,24 @@ def convert_video(raw_video_path):
     shutil.copy2(raw_video_path, out_webm_root)
     shutil.copy2(raw_video_path, out_webm_docs)
     print(f"Created: {out_webm_root} and {out_webm_docs}")
+
+    # Generate animated WebP for README / docs previews
+    out_webp_root = WORKSPACE / "demo.webp"
+    out_webp_docs = DOCS_DIR / "demo.webp"
+    print("Generating animated WebP preview...")
+    cmd_webp = [
+        ffmpeg_exe, "-y",
+        "-i", str(raw_video_path),
+        "-vf", "fps=10,scale=1024:-1:flags=lanczos",
+        "-loop", "0",
+        str(out_webp_root)
+    ]
+    try:
+        subprocess.run(cmd_webp, check=True)
+        shutil.copy2(out_webp_root, out_webp_docs)
+        print(f"Created: {out_webp_root} and {out_webp_docs} ({out_webp_root.stat().st_size / 1024 / 1024:.2f} MB)")
+    except Exception as e:
+        print(f"WebP generation warning: {e}")
 
     print("All video conversions completed successfully!")
 
