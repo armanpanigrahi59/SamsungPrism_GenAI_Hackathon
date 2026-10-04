@@ -6,6 +6,10 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "trio>=0.24",
     "jsonschema>=4.0",
+    # Windows ships no IANA time-zone database; the flight engine needs one
+    # for local departure/arrival times (it falls back to fixed UTC offsets
+    # without it). Linux/macOS use the system database.
+    "tzdata>=2023.3; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +38,9 @@ web = [
     "quart>=0.19",
     "quart-trio>=0.11",
     "hypercorn>=0.16",
+    # No airline API / API key: flights run on the offline world flight
+    # model shipped in agent/data/flight_model.json.gz (rebuild it with
+    # scripts/build_flight_model.py, which needs only the stdlib).
 ]
 
 [tool.setuptools.packages.find]
@@ -48,6 +55,10 @@ web = [
 # (see manifests/travel_manifest.json usage in demo.py / tests/conftest.py),
 # so excluding them from packaging changes nothing at runtime.
 include = ["agent*"]
+
+[tool.setuptools.package-data]
+# the compiled world flight model (scripts/build_flight_model.py)
+agent = ["data/*.json.gz"]
 
 [tool.pytest.ini_options]
 trio_mode = true

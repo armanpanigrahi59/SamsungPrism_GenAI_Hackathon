@@ -4,13 +4,16 @@
     {
       "name": "search_flights",
       "mutates": false,
-      "description": "Search flights between an origin and destination on a given date.",
+      "description": "Search flights between an origin and destination on a given date; optionally round trip (return_date), for 1-9 passengers, in a cabin class.",
       "parameters": {
         "type": "object",
         "properties": {
           "origin": {"type": "string"},
           "destination": {"type": "string"},
-          "date": {"type": "string"}
+          "date": {"type": "string"},
+          "return_date": {"type": "string"},
+          "passengers": {"type": "integer", "minimum": 1, "maximum": 9},
+          "cabin": {"type": "string", "enum": ["economy", "premium_economy", "business", "first"]}
         },
         "required": ["origin", "destination", "date"]
       }

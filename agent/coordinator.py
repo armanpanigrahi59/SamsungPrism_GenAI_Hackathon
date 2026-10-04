@@ -15,7 +15,7 @@ without polling.
 """
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import trio
 
@@ -42,6 +42,11 @@ class Coordinator:
         self._dispatched_keys: set[str] = set()  # Safety: duplicate-call guard
         self._salvage_cache = None  # wired in by Layer 2 if present
         self._nursery: Optional[trio.Nursery] = None
+        # Optional observer for finished calls (done or error, never
+        # cancelled). Not an Action -- the agent's output protocol stays
+        # the five action types -- just a hook a host (server/app.py) can
+        # use to show tool results, e.g. flight offers, in its UI.
+        self.result_listener: Optional[Callable[[DispatchedCall], Awaitable[None]]] = None
 
     def attach_nursery(self, nursery: trio.Nursery) -> None:
         self._nursery = nursery
@@ -157,6 +162,7 @@ class Coordinator:
                         "call_id": record.call_id, "tool": record.tool_name,
                         "generation": record.generation, "speculative": record.speculative,
                     })
+                await self._notify_result(record)
             except trio.Cancelled:
                 record.status = "cancelled"
                 if self.trace:
@@ -172,6 +178,28 @@ class Coordinator:
                     self.trace.log("call_error", {
                         "call_id": record.call_id, "tool": record.tool_name, "error": str(exc),
                     })
+                await self._notify_result(record)
+
+    async def publish_cached_result(self, tool_name: str, args: dict, result: Any) -> None:
+        """Surface a salvage-cache hit to the result listener, so a host UI
+        shows the reused result exactly like a fresh one."""
+        generation = await self.slot_state.current_generation()
+        record = DispatchedCall(
+            call_id=f"cache_{tool_name}_{generation}_{len(self.calls)}", tool_name=tool_name,
+            args=args, generation=generation, mutates=False, status="done", result=result,
+        )
+        await self._notify_result(record)
+
+    async def _notify_result(self, record: DispatchedCall) -> None:
+        if self.result_listener is None:
+            return
+        try:
+            await self.result_listener(record)
+        except trio.Cancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- a UI hook must never break a call
+            if self.trace:
+                self.trace.log("result_listener_error", {"call_id": record.call_id, "error": str(exc)})
 
     def has_pending(self, tool_name: str, generation: int) -> bool:
         """True if a call for this tool is already pending at this exact

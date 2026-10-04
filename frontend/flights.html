@@ -12,88 +12,199 @@
     <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
     <div class="links">
       <a href="/flights" class="active">Flights</a>
+      <a href="/airports">Airports</a>
       <a href="/support">Support</a>
       <a href="/how-it-works">How it works</a>
     </div>
     <div class="status-pill down" id="connPill"><span class="led"></span><span id="connText">connecting…</span></div>
   </div>
 
-  <div class="hero">
+  <div class="hero compact">
     <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
       <source src="/assets/hero.mp4" type="video/mp4" />
     </video>
     <div class="hero-overlay"></div>
     <div class="hero-content">
-      <h1>Tell us where you're flying — even if you change your mind mid-sentence.</h1>
-      <p>This search doesn't wait for you to finish talking. It starts working the moment you start, and throws away
-         guesses the instant you correct yourself — watch the timeline below as you type.</p>
-      <div class="chips">
+      <h1>Fly anywhere — and change your mind mid-sentence.</h1>
+      <p>Search every major airport in the world, or just say where you're going. The assistant starts searching
+         while you're still typing and throws away guesses the instant you correct yourself.</p>
+      <div class="chips" id="heroChips">
         <div class="chip" data-demo="1">▶ Run the barge-in demo</div>
-        <div class="chip" data-fill="book a flight from Delhi to Paris on the 5th">Delhi → Paris</div>
-        <div class="chip" data-fill="book a flight from Mumbai to Nairobi on the 9th">Mumbai → Nairobi</div>
+        <!-- replaced on load by busy real routes from the flight model (/api/routes/popular) -->
+        <div class="chip" data-fill="book a flight from London to New York next friday">London → New York</div>
+        <div class="chip" data-fill="book a flight from Delhi to Dubai tomorrow">Delhi → Dubai</div>
       </div>
     </div>
   </div>
 
   <div class="shell">
     <div>
+      <div class="card search-card">
+        <h2>Search flights</h2>
+        <p class="hint" id="modelHint">Type a city, airport or IATA code — every major airport in the world is searchable.
+           Schedules and fares come from an offline world flight model, no airline API involved.</p>
+
+        <div class="search-top">
+          <div class="seg" id="tripType" role="radiogroup" aria-label="Trip type">
+            <button type="button" data-trip="oneway" class="active" role="radio" aria-checked="true">One-way</button>
+            <button type="button" data-trip="round" role="radio" aria-checked="false">Round trip</button>
+          </div>
+          <div class="pax-control" aria-label="Passengers">
+            <span>Passengers</span>
+            <button type="button" id="paxMinus" aria-label="Fewer passengers">−</button>
+            <b id="paxCount">1</b>
+            <button type="button" id="paxPlus" aria-label="More passengers">+</button>
+          </div>
+          <select class="cabin-select" id="cabinSelect" aria-label="Cabin class">
+            <option value="economy">Economy</option>
+            <option value="premium_economy">Premium Economy</option>
+            <option value="business">Business</option>
+            <option value="first">First</option>
+          </select>
+        </div>
+
+        <div class="search-row">
+          <div class="airport-field" id="originField">
+            <label for="originInput">From</label>
+            <input type="text" id="originInput" placeholder="City or airport" autocomplete="off" spellcheck="false"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="originDropdown" />
+            <div class="airport-dropdown" id="originDropdown" role="listbox"></div>
+          </div>
+          <button class="swap-btn" id="swapBtn" type="button" title="Swap From and To" aria-label="Swap From and To">⇄</button>
+          <div class="airport-field" id="destinationField">
+            <label for="destinationInput">To</label>
+            <input type="text" id="destinationInput" placeholder="City or airport" autocomplete="off" spellcheck="false"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="destinationDropdown" />
+            <div class="airport-dropdown" id="destinationDropdown" role="listbox"></div>
+          </div>
+        </div>
+        <div class="search-row-2 one-way" id="dateRow">
+          <div class="airport-field" id="departField">
+            <label for="dateInput">Depart</label>
+            <input type="date" id="dateInput" />
+          </div>
+          <div class="airport-field" id="returnField">
+            <label for="returnInput">Return</label>
+            <input type="date" id="returnInput" />
+          </div>
+          <button class="btn-primary" id="searchFlightsBtn" type="button">Search flights</button>
+        </div>
+        <div class="form-error" id="formError" role="alert"></div>
+      </div>
+
+      <div class="card results-card" id="resultsCard" hidden>
+        <div class="results-head">
+          <div>
+            <h2 id="resultsTitle">Flights</h2>
+            <div class="results-sub" id="resultsSub"></div>
+          </div>
+          <button class="btn-ghost small" id="shareBtn" type="button">Copy link</button>
+        </div>
+        <div class="date-strip" id="dateStrip" aria-label="Prices on nearby days"></div>
+        <div class="leg-tabs" id="legTabs" hidden></div>
+        <div class="filters" id="filters" hidden>
+          <div class="filter-group" id="stopsFilter"><span>Stops</span>
+            <button type="button" data-stops="any" class="active">Any</button>
+            <button type="button" data-stops="0">Nonstop</button>
+            <button type="button" data-stops="1">≤ 1 stop</button>
+          </div>
+          <div class="filter-group" id="timeFilter"><span>Departs</span>
+            <button type="button" data-time="morning">Morning</button>
+            <button type="button" data-time="afternoon">Afternoon</button>
+            <button type="button" data-time="evening">Evening</button>
+            <button type="button" data-time="night">Night</button>
+          </div>
+          <div class="filter-group" id="airlineFilter"><span>Airlines</span></div>
+        </div>
+        <div class="sort-row" id="sortRow" hidden>
+          <span class="count" id="resultCount"></span>
+          <div class="sort-tabs" id="sortTabs" role="tablist" aria-label="Sort flights">
+            <button type="button" data-sort="best" class="active" role="tab">Best</button>
+            <button type="button" data-sort="price" role="tab">Cheapest</button>
+            <button type="button" data-sort="duration" role="tab">Fastest</button>
+            <button type="button" data-sort="depart" role="tab">Earliest</button>
+          </div>
+        </div>
+        <div id="resultsBody" aria-live="polite"></div>
+        <div class="booking-panel" id="bookingPanel" hidden></div>
+        <p class="results-note">Modeled schedule: real airports and real airline route network (OurAirports + OpenFlights,
+          cleaned for later mergers and new airports), with day-by-day departures, times, fares and seats generated by
+          the offline flight model. Not live availability — bookings are simulated and issue no ticket.</p>
+      </div>
+
+      <div class="card talk-card">
+        <h2>…or just say it</h2>
+        <p class="hint">Type naturally — <i>“outta chicago headed to miami next friday, back on the 20th, 2 adults”</i>.
+           Text streams to the agent as you type, like live speech-to-text. Press <b>Enter</b> to end your turn; change
+           your mind mid-sentence and watch the stale search get cancelled.</p>
+        <textarea id="talk" placeholder="book a flight from Delhi to Paris on the 5th"></textarea>
+        <div class="talk-actions">
+          <button class="btn-primary" id="sendBtn" type="button">Send turn ↵</button>
+          <button class="btn-interrupt" id="interruptBtn" type="button">⏸ Interrupt</button>
+          <button class="btn-ghost" id="resetBtn" type="button">New session</button>
+        </div>
+        <div class="conn-hint" id="connHint" aria-live="polite"></div>
+        <div class="footer-stats">
+          <span>NLU: <b id="backendChain">—</b></span>
+          <span>Flights: <b id="flightsBackendChain">—</b></span>
+          <span>Last turn latency: <b id="latencyVal">—</b></span>
+          <span>Cancelled calls: <b id="cancelCount">0</b></span>
+        </div>
+      </div>
+
       <div class="card trip-card">
         <div class="label-row">
-          <h2>Your trip, live</h2>
+          <h2>What the agent understood</h2>
           <span class="gen-badge" id="genBadge">generation 0</span>
         </div>
         <div class="trip-fields" id="fieldsGrid"></div>
         <div class="intent-line">Understood intent: <b id="intentVal">none yet</b></div>
       </div>
-
-      <div class="card talk-card">
-        <h2>Speak to the assistant</h2>
-        <p class="hint">Typing streams partial chunks to the agent as you go — just like live speech-to-text. Press <b>Enter</b> to end your turn.</p>
-        <textarea id="talk" placeholder="book a flight from Delhi to Paris on the 5th"></textarea>
-        <div class="talk-actions">
-          <button class="btn-primary" id="sendBtn">Send turn ↵</button>
-          <button class="btn-interrupt" id="interruptBtn">⏸ Interrupt</button>
-          <button class="btn-ghost" id="resetBtn">New session</button>
-        </div>
-        <div class="conn-hint" id="connHint" aria-live="polite"></div>
-        <div class="footer-stats">
-          <span>Backend: <b id="backendChain">—</b></span>
-          <span>Last turn latency: <b id="latencyVal">—</b></span>
-          <span>Cancelled calls: <b id="cancelCount">0</b></span>
-          <span>Tools loaded: <b>search_flights, book_flight</b></span>
-        </div>
-      </div>
     </div>
 
     <div class="card timeline-card">
       <h2>Live agent timeline</h2>
-      <p class="hint">Every tool call, cancellation and response the agent emits, in order.</p>
+      <p class="hint">Every tool call, result, cancellation and response the agent emits, in order.</p>
       <div class="timeline" id="timeline">
-        <div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>
+        <div class="empty-state" id="emptyState">Nothing yet — search above, try a chip, or type your own request.</div>
       </div>
     </div>
   </div>
 
   <div class="site-footer">
     <span>prism-agent — Samsung PRISM Theme 05</span>
-    <span><a href="/how-it-works">Why interruptions don't lose your place →</a></span>
+    <span><a href="/airports">Browse every airport →</a></span>
   </div>
 
 <script src="/assets/assistant.js"></script>
+<script src="/assets/flights.js"></script>
 <script>
-  PrismAssistant.init({
+  const assistant = PrismAssistant.init({
     domain: 'flights',
     fields: [
       { key: 'origin', label: 'From' },
       { key: 'destination', label: 'To' },
-      { key: 'date', label: 'Date' },
+      { key: 'date', label: 'Depart' },
+      { key: 'return_date', label: 'Return' },
+      { key: 'passengers', label: 'Passengers' },
+      { key: 'cabin', label: 'Cabin' },
     ],
+    // Built from busy real routes when the page loads (see flights.js);
+    // this static script is only the fallback if that fetch fails.
     demoScript: [
-      { text: 'book a flight from Delhi to Paris on the 5th', endOfTurn: false, waitAfterMs: 500 },
+      { text: 'book a flight from Delhi to Paris on the 5th', endOfTurn: false, waitAfterMs: 250 },
       { interrupt: true, waitAfterMs: 300 },
       { text: 'actually from Delhi to Tokyo on the 5th', endOfTurn: true },
     ],
+    decorateField: (key, value, el) => PrismFlights.decorateField(key, value, el),
+    onToolResult: (msg) => PrismFlights.onToolResult(msg),
+    onAction: (msg) => PrismFlights.onAction(msg),
+    onBooking: (msg) => PrismFlights.onBooking(msg),
+    onReset: () => PrismFlights.reset(),
+    onTurnSent: () => PrismFlights.turnSent(),
+    onConnected: () => PrismFlights.connected(),
   });
+  PrismFlights.init(assistant);
 </script>
 </body>
 </html>

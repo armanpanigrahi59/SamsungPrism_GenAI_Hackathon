@@ -85,7 +85,10 @@ class SpeculativeEngine:
         spec = self.registry.specs.get(tool_name)
         keys = self.speculation_stable_keys.get(tool_name)
         if keys is None and spec is not None:
-            keys = tuple(spec.parameters.get("required", []))
+            # required params plus any optional ones actually supplied, so a
+            # business-class or round-trip search never reuses the cached
+            # economy / one-way result for the same route and date
+            keys = tuple(sorted(set(spec.parameters.get("required", [])) | set(args.keys())))
         keys = keys or tuple(sorted(args.keys()))
         return tuple((k, args.get(k)) for k in sorted(keys))
 

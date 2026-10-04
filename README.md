@@ -9,7 +9,8 @@
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![async trio](https://img.shields.io/badge/Async-Trio-8B5CF6?style=for-the-badge&logo=python&logoColor=white)](https://trio.readthedocs.io/)
-[![tests 47 passed](https://img.shields.io/badge/Tests-47%20Passed-10B981?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+[![tests 159 passed](https://img.shields.io/badge/Tests-159%20Passed-10B981?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+[![World flight model](https://img.shields.io/badge/Flights-3%2C244%20airports%20%C2%B7%20no%20API%20keys-0EA5E9?style=for-the-badge&logo=airplayaudio&logoColor=white)](#-world-flight-model-no-airline-api)
 [![NLU Backends](https://img.shields.io/badge/NLU-Groq%20%7C%20Ollama%20%7C%20Claude%20%7C%20Regex-F59E0B?style=for-the-badge&logo=openai&logoColor=white)](#-nlu-backend-configuration)
 [![Web Frontend](https://img.shields.io/badge/Frontend-Quart--Trio%20%7C%20WS-EC4899?style=for-the-badge&logo=websocket&logoColor=white)](#-running-the-full-app-frontend--backend)
 [![License MIT](https://img.shields.io/badge/License-MIT-6B7280?style=for-the-badge)](LICENSE)
@@ -20,7 +21,7 @@
 
 <br/>
 
-<img src="Claude outputs/preview_home_v2.png" alt="prism-agent Landing Page" width="92%" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.25);" />
+<img src="docs/screenshots/home.png" alt="prism-agent Landing Page" width="92%" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.25);" />
 
 </div>
 
@@ -42,6 +43,7 @@
 - [🛡️ Reliability notes (frontend)](#%EF%B8%8F-reliability-notes-frontend)
 - [🚀 Deployment](#-deployment)
 - [🤖 NLU backend configuration](#-nlu-backend-configuration)
+- [🛫 World flight model (no airline API)](#-world-flight-model-no-airline-api)
 - [🧪 Testing](#-testing)
 - [🔍 Known simplifications](#-known-simplifications)
 - [📄 License](#-license)
@@ -112,7 +114,7 @@ flowchart TD
     SLOW --> L1["Layer 1 — Speculation (speculation.py)\nscores candidate, fires read-only calls\nbefore end-of-turn if confident enough"]
     L1 --> NLU["NLU provider (nlu.py)\nGroq -> Ollama -> Regex fallback chain"]
     NLU --> L2["Layer 2 — Salvage cache (salvage.py)\ncache hit? reuse. cache miss? call the tool."]
-    L2 --> ENV["Mock tool environment (mock_env.py)"]
+    L2 --> ENV["Tool environment: offline world flight model\n(flights_provider.py) + support mocks (mock_env.py)"]
 
     INT["User interrupts or corrects a slot"] --> BUMP["bump_generation()"]
     BUMP --> CANCEL["cancel every in-flight call\nstill tagged with the old generation"]
@@ -142,6 +144,7 @@ flowchart TD
 | **4** | `tools.py` | Schema-driven argument extraction matching slot values to manifest JSON schemas for novel, unseen tools. | **Unseen Tool Generalization**<br>**Task Completion (40%)** |
 | **—** | `nlu.py` | Multi-tier intent & slot extraction: Groq (cloud) → Ollama (local) → Anthropic → Regex deterministic fallback. | **Natural Language Grounding** |
 | **—** | `protocol.py` | Strict JSON-schema validation over every outbound `Action` payload prior to emission. | **Protocol Safety (10%)** |
+| **—** | `flights_provider.py`<br>`airports.py`<br>`travel_parse.py` | Offline world flight model: every major airport, day-to-day schedules, fares, connections and simulated bookings; airport gazetteer + date parsing behind the NLU. No airline API. | **Task Completion (40%)**<br>**Natural Language Grounding** |
 | **—** | `mock_env.py` | Deterministic tool backend mock with injectable latencies and fault controls. | **Reproducible Benchmarking** |
 | **—** | `main.py` | `Agent` harness orchestrating channels, nurseries, and cross-layer state transitions. | **End-to-End Coordination** |
 
@@ -166,7 +169,7 @@ flowchart LR
     subgraph Core["Agent Engine: agent/ (Pure Trio Core)"]
         AGENT["Agent Instance"]
         REG["ToolRegistry"]
-        ENV2["MockToolEnvironment"]
+        ENV2["OfflineFlightProvider\n+ MockToolEnvironment"]
     end
 
     P2 -- "WebSocket: domain='flights'" --> WS
@@ -205,23 +208,33 @@ prism-agent/
 │   ├── asr.py                     # Local faster-whisper ASR integration
 │   ├── protocol.py                # Schema validation for outbound actions
 │   ├── mock_env.py                # Deterministic tool environment with latency
+│   ├── airports.py                # World airport gazetteer: search, place resolution
+│   ├── travel_parse.py            # Origin/destination/date extraction from free text
+│   ├── flights_provider.py        # Offline day-to-day flight engine (search + booking)
+│   ├── data/flight_model.json.gz  # Compiled world flight model (~400 KB)
 │   ├── harness.py                 # Virtual-clock trace replay harness
 │   └── events.py, trace.py        # Event primitives and JSON trace serialization
 ├── server/
-│   └── app.py                     # Native Quart-Trio ASGI server & WebSocket bridge
+│   ├── app.py                     # Native Quart-Trio ASGI server & WebSocket bridge
+│   └── port_guard.py              # Stops a stale server still holding the port (Windows-safe)
 ├── frontend/
 │   ├── index.html                 # Atmospheric hero landing page
-│   ├── flights.html               # Live flight agent (barge-in cancellation demo)
+│   ├── flights.html               # Flight search + booking, live agent (barge-in demo)
+│   ├── airports.html              # Airport explorer: every airport by continent / country
 │   ├── support.html               # Live device support agent (clarification demo)
 │   ├── how-it-works.html          # Interactive architecture and layer guide
 │   └── assets/
 │       ├── style.css              # Custom dark-theme glassmorphism design system
 │       ├── assistant.js           # Full-duplex WebSocket client & reactive timeline
+│       ├── flights.js             # Search form, results, filters, round trips, booking
+│       ├── airports.js            # Airport explorer grid, filters, details drawer
 │       ├── hero.mp4               # High-definition video hero loop
 │       └── hero-poster.jpg        # Fast-paint video poster fallback
 ├── manifests/
 │   └── travel_manifest.json       # Tool schemas (search_flights, book_flight, etc.)
-├── tests/                         # 47 unit & integration tests across all layers
+├── scripts/
+│   └── build_flight_model.py      # Builds ("trains") the flight model from public data
+├── tests/                         # 159 unit & integration tests across all layers
 ├── demo.py                        # Standalone terminal walkthrough scenario
 ├── .env.example                   # NLU backend template (copy to .env)
 ├── Procfile                       # `web: python server/app.py` — for PaaS deploys
@@ -304,7 +317,7 @@ python demo.py
   [  cancellation] {"call_id": "call_nlu_extract_0_0", "tool": "nlu_extract", "stale_generation": 0, "current_generation": 1}
   [        filler] {"text": "Go ahead, I'm listening.", "reason": "interruption_ack"}
   [     tool_call] {"call_id": "call_search_flights_4_1", "tool": "search_flights", "args": {"origin": "Delhi", "destination": "Tokyo", "date": "5th"}, "generation": 4, "speculative": false}
-  [final_response] {"text": "Working on your search_flights request.", ...}
+  [final_response] {"text": "On it -- search flights: origin Delhi, destination Tokyo, date 5th.", ...}
 
 === Final slot state ===
 {
@@ -336,14 +349,31 @@ prism-agent web bridge -> http://127.0.0.1:8000  (Ctrl+C to stop)
 
 Point your browser to **`http://127.0.0.1:8000`**. The single process serves the HTML pages, streaming CSS/JS/video assets, and the high-throughput WebSocket bridge.
 
+> [!IMPORTANT]
+> **After pulling new code, restart the server** (`Ctrl+C`, then `python server/app.py` again). Pages are read
+> from disk on every request but the API lives in the running process, so an old process serves new pages against
+> old endpoints. The pages detect this through `GET /api/version` and show a red banner.
+>
+> **Old process still holding the port?** Hypercorn sets `SO_REUSEADDR`, and on Windows that lets a new server bind
+> a port an *old* server is still listening on — the restart "works" but the old process keeps answering. On start-up
+> `server/app.py` now checks the port: if an older prism-agent server (a Python process serving these pages) is
+> there, it stops it and takes the port; if some other program owns it, it moves to the next free port and prints
+> the URL. It then binds with `SO_EXCLUSIVEADDRUSE` on Windows so the port can't be shared again. Set
+> `PRISM_REPLACE_OLD=0` to never stop another process. Manual fix on Windows:
+> `netstat -ano | findstr :8000` → `taskkill /PID <pid> /F`.
+>
+> `server/app.py` also always imports the `agent` package next to it, so a stale copy from an earlier
+> `pip install .` can't shadow your working tree.
+
 ---
 
-## 🎬 The four pages, and what each proves
+## 🎬 The five pages, and what each proves
 
 | Page | URL | Visible Manifest Tools | Technical Capability Demonstrated |
 |---|---|---|---|
 | **Landing** | `/` | *None (Static)* | Atmospheric overview, architecture summary, and quick navigation into live test pages. |
-| **Flights** | `/flights` | `search_flights`<br>`book_flight` | **Live Barge-In & Cancellation**: Type a flight query, then barge in with a different destination. Observe the stale speculative search strike through live in the timeline. |
+| **Flights** | `/flights` | `search_flights`<br>`book_flight` | **Full booking flow + Live Barge-In**: From/To autocomplete over every major airport (popular airports on focus, keyboard navigation, swap), one-way / round trip, 1–9 passengers, four cabins, a ±3-day fare strip, filters (stops, departure time, airline), sorting, per-leg selection and a simulated booking. The form drives the agent over the WebSocket (with an automatic REST fallback), and free-text turns fill the form back in. Barge in with a different destination and watch the stale speculative search strike through in the timeline. |
+| **Airports** | `/airports` | *None (REST)* | **World airport explorer**: all 3,244 airports, filterable by continent, country and free text, sortable, paginated; a details drawer with each airport's busiest destinations, weekly frequencies and airlines, and one-click **Fly from / Fly to / Search** links into `/flights`. |
 | **Support** | `/support` | `create_support_ticket`<br>`lookup_manual` | **Grounded Clarification**: Solicits device issue descriptions. When required slots are ambiguous, the agent formulates clarifying questions rather than hallucinating. |
 | **How It Works** | `/how-it-works` | *None (Static)* | Comprehensive interactive breakdown of the 5 architectural layers and their rubric alignments. |
 
@@ -351,12 +381,22 @@ Point your browser to **`http://127.0.0.1:8000`**. The single process serves the
   <table width="100%">
     <tr>
       <td width="50%" align="center">
-        <b>Flight Assistant Live Barge-In (<code>/flights</code>)</b><br/>
-        <img src="Claude outputs/preview_flights_v2.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
+        <b>Flight search, round trip + live agent timeline (<code>/flights</code>)</b><br/>
+        <img src="docs/screenshots/flights.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
       </td>
       <td width="50%" align="center">
+        <b>World airport explorer (<code>/airports</code>)</b><br/>
+        <img src="docs/screenshots/airports.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
+      </td>
+    </tr>
+    <tr>
+      <td width="50%" align="center">
         <b>Device Support Clarification (<code>/support</code>)</b><br/>
-        <img src="Claude outputs/preview_support.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
+        <img src="docs/screenshots/support.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
+      </td>
+      <td width="50%" align="center">
+        <b>Landing page (<code>/</code>)</b><br/>
+        <img src="docs/screenshots/home.png" width="98%" style="border-radius: 8px; margin-top: 8px;" />
       </td>
     </tr>
   </table>
@@ -409,16 +449,19 @@ sequenceDiagram
     Server->>Agent: InputEvent(TEXT_CHUNK, end_of_turn=true)
     Agent->>NLU: Re-extract slots from full utterance
     Agent->>Tool: search_flights(origin="Delhi", destination="Tokyo") [generation=1]
-    Tool-->>Agent: Returns flight results
     Agent-->>Server: Action(final_response)
     Server-->>Browser: {"type":"action","action":"final_response",...}
-    Browser->>You: Displays final itinerary & confirmed state
+    Tool-->>Agent: Day's schedule from the offline flight model
+    Agent-->>Server: tool_result hook (not an Action)
+    Server-->>Browser: {"type":"tool_result","result":{"offers":[...]}}
+    Browser->>You: Flight cards (sort, select, simulated booking)
 ```
 
 ### Critical WebSocket Bridge Details
 1. **Mandatory Handshake**: The `init` frame must be the first message transmitted. It ensures the session's `Agent` is bound strictly to the selected domain.
 2. **State Synchronization**: A `{"type":"state", "intent", "slots", "generation"}` packet is dispatched after every action, updating the UI's reactive trip card without client polling.
-3. **HTTP Byte-Range Audio/Video**: `server/app.py` implements RFC-compliant byte-range streaming for `hero.mp4`, enabling seeking and instant video playback.
+3. **Tool results**: finished (never cancelled) tool calls are streamed as `tool_result` frames through the agent's `tool_result_listener` hook — the agent's own five-action protocol is unchanged. A result is ignored by the UI if a newer call to the same tool has since been dispatched.
+4. **HTTP Byte-Range Audio/Video**: `server/app.py` implements RFC-compliant byte-range streaming for `hero.mp4`, enabling seeking and instant video playback.
 
 ---
 
@@ -464,6 +507,7 @@ most of the way to an actual deployment is just setting them:
 | `PRISM_HOST` | `0.0.0.0` if `PORT` is set, else `127.0.0.1` | Bind address. The default flips automatically so a plain `python server/app.py` on a laptop stays loopback-only, while a `PORT`-driven deploy binds every interface the way platforms expect. |
 | `PRISM_MAX_TEXT_LENGTH` | `2000` | Hard cap, in characters, on one incoming `text_chunk`'s text — enforced server-side regardless of the frontend's own cap, so a client that skips the browser entirely can't send an unbounded payload. |
 | `PRISM_LOG_LEVEL` | `INFO` | Python `logging` level. Every connection logs its own connect/domain/NLU-chain/disconnect, tagged with a short per-connection id. |
+| `PRISM_FLIGHTS_BACKEND` | `model` | `model`: offline world flight model (no API keys). `mock`: the original fake generator in `mock_env.py`. See [World flight model](#-world-flight-model-no-airline-api) below. |
 
 A generic deploy (exact UI varies by platform, the shape doesn't):
 
@@ -513,6 +557,99 @@ A generic deploy (exact UI varies by platform, the shape doesn't):
 
 ---
 
+## 🛫 World flight model (no airline API)
+
+The `/flights` page — the From/To autocomplete, the conversational search and `search_flights` /
+`book_flight` — runs on an **offline world flight model**. No airline API, no API key, no network
+calls at runtime.
+
+### How the model is built ("trained")
+
+`scripts/build_flight_model.py` compiles two public datasets into `agent/data/flight_model.json.gz`
+(~400 KB, committed, loaded once at server start):
+
+| Source | License | What it contributes |
+|---|---|---|
+| [OurAirports](https://ourairports.com/data/) | Public domain | Every airport: type (large/medium), scheduled-service flag, IATA code, city, coordinates, alternate names (“Bombay”, “Madras”, “Peking”, “NYC”) |
+| [OpenFlights](https://openflights.org/data.html) | ODbL 1.0 | ~67,000 airline routes (which airline flies which airport pair, with which aircraft), airline names, aircraft types, IANA time zones |
+
+The build is data-driven end to end:
+
+1. **Airports** — the 3,244 large + medium airports with scheduled service and an IATA code, each scored by
+   how many airline-routes touch it. The score ranks autocomplete (“new york” → JFK, EWR, LGA before Islip)
+   and decides what a bare city name means (“London” → LHR, LGW, STN, LTN).
+2. **Carriers** — airlines.dat reuses codes (VY is Vueling *and* Formosa Airlines); each code is resolved to
+   the airline whose home country matches where its routes actually fly. Codes whose routes never touch the
+   named airline's country are flagged — the significant ones corrected, the rest shown as “Airline XX”.
+3. **Cleaning** — codeshares and codeshare-like entries dropped; carriers that merged since 2014 folded into
+   their successor (US Airways → American), ceased ones removed (Air Berlin, Jet Airways…); routes of replaced
+   airports moved to the new airport (Tegel/Schönefeld → BER, Dakar → DSS…) and re-coded airports matched by ICAO.
+4. **Frequency model** — every airline-route gets a weekly frequency from a gravity model (connectivity of both
+   airports, damped by distance, capped per distance band), with one global scale fitted by bisection so the
+   network flies **~106,000 departures a day** — the real-world total (~38.9M commercial flights in 2019).
+
+```bash
+python scripts/build_flight_model.py   # re-download sources (~15 MB, cached in build/) and rebuild
+```
+
+### What it gives you, day by day
+
+`agent/flights_provider.py` turns the model into day-to-day data for any date up to ~11 months ahead:
+
+- **which flights operate that day** (weekly frequencies spread across the week — a 3×-weekly long-haul only
+  shows on its days), with flight numbers and departure times that stay stable like a real timetable;
+- **block times** from great-circle distance with an eastbound/westbound wind adjustment, and **arrival times
+  in the destination's local time zone** (DST-aware);
+- **connections** through real hubs when direct service is thin — one-stop, two-stop as a last resort — with
+  minimum connection times;
+- **fares** from distance, advance purchase, weekday, season, time of day, competition on the route and
+  low-cost carriers; **seats left**; and **simulated bookings** with a 6-character confirmation code
+  (idempotent — the same offer and passenger never double-book);
+- **trip options**: one-way or round trip (a separate return leg with its own offers), 1–9 passengers with
+  per-person and total prices, and Economy / Premium Economy / Business / First cabins with their own fares and
+  seat counts — understood from free text too (*“back on the 20th, 2 adults, business class”*);
+- a **fare calendar** (lowest fare per day, ±3 days) and each airport's **top destinations**.
+
+Everything is deterministic per (route, date): the same search returns the same flights and prices; a different
+date changes them the way a real schedule would.
+
+### Understanding free text about any airport
+
+`agent/travel_parse.py` uses the same gazetteer, so the regex NLU (no LLM needed) understands any major airport,
+city or historic name in natural phrasing — *“outta chicago headed to miami next friday”*, *“Mumbai → Frankfurt
+12 december”*, *“flights from bombay to madras in 3 days”* — and dates like *tomorrow*, *next friday*,
+*this weekend*, *dec 12*, *the 5th*, *in 3 days*. Unknown places are still captured, at lower confidence, and the
+search explains what it couldn't match with suggestions.
+
+### Honest limits
+
+This is a **model of the network, not live availability**. Real-time delays, cancellations, sold-out flights and
+today's actual fares cannot be known without a live feed. The route network is OpenFlights' **June 2014
+snapshot**: the build updates it for known mergers, shutdowns and replaced airports, but it can't add routes
+launched since. Every result carries `"modeled": true`, and the UI labels schedules and bookings as modeled /
+simulated.
+
+### API (used by the frontend)
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/version` | API version + model counts (pages use it to detect a stale server) |
+| `GET /api/airports?q=lon` | Ranked airport suggestions |
+| `GET /api/airports/popular?n=12&continent=EU` | Best-connected airports (the From/To list before typing) |
+| `GET /api/airports/browse?continent=&country=&q=&sort=routes\|name\|code&page=&page_size=&routes_only=1` | Paginated airport directory (the explorer) |
+| `GET /api/countries?continent=AS` | Continents + countries with airport counts |
+| `GET /api/airport/BOM?n=15` | One airport with its top destinations, weekly flights and airlines |
+| `GET /api/resolve?q=bombay` | The airport(s) a place string means |
+| `GET /api/search?from=&to=&date=&return=&pax=&cabin=` | Direct search, no agent (shared links + the WebSocket fallback) |
+| `GET /api/fares?from=&to=&date=&pax=&cabin=` | Lowest fare for each day around a date (the date strip) |
+| `POST /api/book` `{"offer_id", "passenger_name"}` | Simulated booking of an offer from a recent search |
+| `GET /api/routes/popular?n=4` | Random busy routes between major hubs (the hero chips) |
+| `GET /api/model` | Model metadata: counts, sources, licences, calibration |
+| WS `{"type":"book", "offer_id", "passenger_name"}` | Simulated booking of an offer from this session's search |
+| WS `{"type":"tool_result", ...}` (server → browser) | Finished tool calls (flight offers), so results render live |
+
+---
+
 ## 🧪 Testing
 
 The repository maintains **100% passing test coverage** across all five architectural layers and backend providers:
@@ -529,7 +666,14 @@ tests/
 ├── test_nlu_groq_plumbing.py        # Groq REST API integration (mocked HTTP)
 ├── test_nlu_ollama_plumbing.py      # Ollama local endpoint integration (mocked HTTP)
 ├── test_nlu_anthropic_plumbing.py   # Anthropic Claude worker offloading (mocked)
-└── test_asr.py                      # Local Whisper ASR transcription contract
+├── test_asr.py                      # Local Whisper ASR transcription contract
+├── test_airports.py                 # World airport gazetteer: ranking, resolution, model counts
+├── test_travel_parse.py             # Origin/destination/date extraction + date resolution
+├── test_flights_provider.py         # Offline schedule engine: times, fares, connections, booking
+├── test_trip_options.py             # Passengers / cabin / return dates, round trips, fare calendar
+├── test_server_api.py               # Every HTTP endpoint + a full WebSocket search -> booking
+├── test_port_guard.py               # Stale-server takeover, port fallback, Windows netstat parsing
+└── test_tool_results.py             # Finished calls reach the host; cancelled calls never do
 ```
 
 Execute the test suite:
@@ -538,8 +682,13 @@ Execute the test suite:
 python -m pytest tests/ -v
 ```
 
+The suite is hermetic: `tests/conftest.py` clears `PRISM_NLU_BACKEND`, the API-key variables and the other
+backend switches before every test, so running it from a shell that has loaded `.env` never makes real
+Groq / Ollama / Anthropic calls (which would be slow, non-deterministic and race the tests' virtual clock).
+Tests for a specific backend set the variables they need themselves.
+
 ```text
-============================= 47 passed in 0.55s ==============================
+============================= 159 passed in 5.5s ==============================
 ```
 
 ---
@@ -552,7 +701,7 @@ To ensure stability and transparent evaluation, certain production elements are 
 |---|---|---|
 | **Vision Grounding** | `VIDEO_FRAME` events assume `grounded_field` and `grounded_value` are already computed. Layer 3 belief fusion is fully implemented and tested. | Integrate real-time VLM frame captioning (e.g. PaliGemma / Moondream). |
 | **Real ASR Stream** | `LocalWhisperASR` is implemented and verified against the contract; integration tests use pre-transcribed payloads. | Stream chunked PCM audio via WebSocket directly into `faster-whisper`. |
-| **Environment Sandbox**| Tested against `mock_env.py` providing deterministic delays and fault injection matching the PRISM eval harness. | Swap mock with production microservice REST endpoints. |
+| **Environment Sandbox**| `create_support_ticket`/`lookup_manual` run on `mock_env.py`'s deterministic delays/fault injection. `search_flights`/`book_flight` run on the [offline world flight model](#-world-flight-model-no-airline-api): real airports and route network, modeled day-to-day schedules/fares, simulated bookings. | Feed the model a current schedule dataset (e.g. a licensed OAG/Cirium extract) through the same build script, if live accuracy is ever needed. |
 | **Confidence Heuristic**| `score_candidate` uses a deterministic slot-completeness metric. | Replace with a calibrated probabilistic intent/slot confidence model. |
 
 ---

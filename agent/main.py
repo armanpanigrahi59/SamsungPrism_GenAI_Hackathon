@@ -50,6 +50,13 @@ _LEGACY_INTENT_TOOL = {
 }
 
 
+def _describe_call(tool_name: str, args: dict) -> str:
+    """'search flights: origin Delhi, destination Paris, date 5th' -- a
+    tool-agnostic sentence for the final response."""
+    parts = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in args.items() if v not in ("", None))
+    return f"{tool_name.replace('_', ' ')}: {parts}" if parts else tool_name.replace("_", " ")
+
+
 class Agent:
     def __init__(
         self,
@@ -75,6 +82,10 @@ class Agent:
         # means AUDIO_CLIP events must carry a pre-supplied `transcript`
         # (the original behavior) -- see asr.py.
         self.asr_provider = asr_provider or default_asr_provider()
+        # Optional async callback(DispatchedCall) for finished tool calls --
+        # see Coordinator.result_listener. server/app.py uses it to stream
+        # results (flight offers) to the browser.
+        self.tool_result_listener = None
 
     def _tool_specs_for_nlu(self) -> list[dict]:
         return [
@@ -112,6 +123,7 @@ class Agent:
             coordinator = Coordinator(self.slot_state, actions_out, trace_logger=self.trace)
             coordinator.attach_nursery(nursery)
             coordinator.attach_salvage_cache(self.salvage)
+            coordinator.result_listener = self.tool_result_listener
             speculative = SpeculativeEngine(coordinator, self.slot_state, self.registry)
             belief = BeliefFusion(self.slot_state, coordinator)
 
@@ -303,26 +315,24 @@ class Agent:
                 stable_key = speculative._stable_key_for(tool_name, args)
                 cached = self.salvage.get(tool_name, stable_key)
                 in_flight = coordinator.find_in_flight(tool_name, stable_key)
+                summary = _describe_call(tool_name, args)
                 if cached is not None:
+                    await coordinator.publish_cached_result(tool_name, args, cached)
                     await coordinator.emit_final_response(
-                        f"(from cache) Here's what I found for your {snapshot.intent}."
+                        f"(from cache) Here's what I found -- {summary}."
                     )
                 elif in_flight is not None:
                     # A speculative call already dispatched with the exact
                     # same tool + stable key is still running -- firing a
                     # second, identical call would be pure waste.
-                    await coordinator.emit_final_response(
-                        f"Working on your {snapshot.intent} request."
-                    )
+                    await coordinator.emit_final_response(f"Already on it -- {summary}.")
                 else:
                     backend = self.registry.get_backend(tool_name)
                     await coordinator.dispatch(
                         tool_name, args, backend, mutates=self.registry.mutates(tool_name),
                         stable_key=stable_key,
                     )
-                    await coordinator.emit_final_response(
-                        f"Working on your {snapshot.intent} request."
-                    )
+                    await coordinator.emit_final_response(f"On it -- {summary}.")
         elif snapshot.intent:
             await coordinator.emit_clarification(
                 f"I understood you want to '{snapshot.intent}', but I don't have a tool for that.",

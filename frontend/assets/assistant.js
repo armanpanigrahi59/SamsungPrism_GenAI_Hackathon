@@ -3,7 +3,7 @@
  * support.html, ...). One copy of the protocol/rendering logic instead of
  * duplicating it per page -- each page just supplies a small config:
  *
- *   PrismAssistant.init({
+ *   const api = PrismAssistant.init({
  *     domain: "flights",                 // sent to the server as the first
  *                                         // frame; server/app.py filters the
  *                                         // tool manifest by domain, so a
@@ -18,7 +18,14 @@
  *       {interrupt: true, waitAfterMs: 300},
  *       {text: "...", endOfTurn: true},
  *     ],
+ *     decorateField(key, value, fieldEl) // optional: add a sub-label under a
+ *                                         // trip-card value
+ *     onToolResult(msg, api)             // optional: a finished tool call
+ *                                         // (server "tool_result" frame)
+ *     onAction(msg), onBooking(msg), onReset(), onTurnSent(), onConnected()
  *   });
+ *   // api: { send(obj), sendTurn(text), isConnected(), setDemoScript(steps),
+ *   //        generation() }
  *
  * Expects the page to provide these element ids: talk, sendBtn,
  * interruptBtn, resetBtn, timeline, emptyState, genBadge, intentVal,
@@ -30,16 +37,25 @@
 (function (global) {
   const MAX_INPUT_LENGTH = 2000; // matches the server-side PRISM_MAX_TEXT_LENGTH cap
 
+  // Everything rendered with innerHTML goes through this -- agent payloads
+  // echo user text ("Got it: ..."), and airport names come from data files.
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   function init(config) {
     const $ = (id) => document.getElementById(id);
     const timelineEl = $('timeline');
-    const emptyState = $('emptyState');
+    const emptyStateHtml = $('emptyState') ? $('emptyState').outerHTML : '';
     const connPill = $('connPill');
     const connText = $('connText');
     const connHint = $('connHint');
     const genBadge = $('genBadge');
     const intentVal = $('intentVal');
     const backendChain = $('backendChain');
+    const flightsBackendChain = $('flightsBackendChain');
     const latencyVal = $('latencyVal');
     const cancelCount = $('cancelCount');
     const talk = $('talk');
@@ -49,6 +65,11 @@
     const resetBtn = $('resetBtn');
 
     const fields = config.fields || [];
+    const hook = (name, ...args) => {
+      try { if (typeof config[name] === 'function') return config[name](...args); } catch (e) { console.error(e); }
+      return undefined;
+    };
+    let demoScript = config.demoScript || null;
     let cancelled = 0;
     let turnStartedAt = null;
     let toolCards = {};
@@ -58,17 +79,19 @@
     let reconnectAttempts = 0;
     let reconnectTimer = null;
     let hintTimer = null;
+    let latestGeneration = 0;
+    let latestCallGen = {};   // tool name -> generation of its newest dispatched call
 
     // Build the live-understanding field cards once, from config -- so a
     // Support page shows Device/Topic/Issue instead of From/To/Date, with
     // zero per-page HTML duplication.
     if (fieldsGrid) {
-      fieldsGrid.style.gridTemplateColumns = `repeat(${Math.min(fields.length, 3) || 1}, 1fr)`;
+      fieldsGrid.style.gridTemplateColumns = `repeat(${Math.min(fields.length, 3) || 1}, minmax(0, 1fr))`;
       fields.forEach((f) => {
         const div = document.createElement('div');
         div.className = 'field';
         div.id = 'field-' + f.key;
-        div.innerHTML = `<span class="field-label">${f.label}</span><span class="field-value empty" id="val-${f.key}">—</span>`;
+        div.innerHTML = `<span class="field-label">${esc(f.label)}</span><span class="field-value empty" id="val-${esc(f.key)}">—</span><span class="field-sub" id="sub-${esc(f.key)}"></span>`;
         fieldsGrid.appendChild(div);
       });
     }
@@ -111,13 +134,14 @@
     function fmtTime(ts) { return (ts % 100000).toFixed(0) + 'ms'; }
 
     function addEvent(kind, cls, headText, bodyHtml, meta, actionId) {
-      if (emptyState && emptyState.parentNode) emptyState.remove();
+      const empty = $('emptyState');
+      if (empty && empty.parentNode) empty.remove();
       const div = document.createElement('div');
       div.className = 'evt ' + cls;
       div.innerHTML = `
-        <div class="evt-head"><span class="evt-kind">${headText}</span><span class="evt-ts">${fmtTime(performance.now())}</span></div>
+        <div class="evt-head"><span class="evt-kind">${esc(headText)}</span><span class="evt-ts">${fmtTime(performance.now())}</span></div>
         <div class="evt-body">${bodyHtml}</div>
-        ${meta ? `<div class="evt-meta">${meta}</div>` : ''}
+        ${meta ? `<div class="evt-meta">${esc(meta)}</div>` : ''}
       `;
       timelineEl.appendChild(div);
       timelineEl.scrollTop = timelineEl.scrollHeight;
@@ -135,13 +159,15 @@
 
     function renderAction(msg) {
       const p = msg.payload || {};
+      hook('onAction', msg);
       switch (msg.action) {
         case 'filler':
-          addEvent('filler', 'filler', 'Filler', `"${p.text || ''}"`, p.reason || '');
+          addEvent('filler', 'filler', 'Filler', `"${esc(p.text || '')}"`, p.reason || '');
           break;
         case 'tool_call': {
+          latestCallGen[p.tool] = Math.max(latestCallGen[p.tool] || 0, p.generation || 0);
           const label = p.speculative ? 'Speculative call' : 'Tool call';
-          const body = `<span class="spin"></span><b>${p.tool}</b>(${JSON.stringify(p.args || {})})`;
+          const body = `<span class="spin"></span><b>${esc(p.tool)}</b>(${esc(JSON.stringify(p.args || {}))})`;
           addEvent('tool_call', 'tool_call', label, body, `gen ${p.generation} · call_id ${p.call_id}`, p.call_id);
           break;
         }
@@ -151,47 +177,94 @@
             card.classList.add('cancelled');
             const kindEl = card.querySelector('.evt-kind');
             if (kindEl) kindEl.textContent = 'Cancelled';
+            const spin = card.querySelector('.spin');
+            if (spin) spin.remove();
           }
           cancelled += 1;
           if (cancelCount) cancelCount.textContent = String(cancelled);
           addEvent('cancellation', 'cancellation', 'Cancellation',
-            `Superseded: <b>${p.tool}</b> (gen ${p.stale_generation} → ${p.current_generation})`, '');
+            `Superseded: <b>${esc(p.tool)}</b> (gen ${esc(p.stale_generation)} → ${esc(p.current_generation)})`, '');
           break;
         }
         case 'clarification':
           // payload key is "question", not "text" -- see agent/protocol.py's
           // _CLARIFICATION_SCHEMA (coordinator.emit_clarification).
-          addEvent('clarification', 'clarification', 'Clarification needed', p.question || '', p.field ? `missing: ${p.field}` : '');
+          addEvent('clarification', 'clarification', 'Clarification needed', esc(p.question || ''), p.field ? `missing: ${p.field}` : '');
           markTurnEnd(); // a clarification ends the turn too, same as a final_response
           break;
         case 'final_response':
-          addEvent('final_response', 'final_response', 'Final response', p.text || '', '');
+          addEvent('final_response', 'final_response', 'Final response', esc(p.text || ''), '');
           markTurnEnd();
           break;
       }
     }
 
+    // A finished (not cancelled) tool call -- server "tool_result" frame.
+    // Stops the card's spinner, says what came back, and hands the result
+    // to the page (e.g. the flights page renders offers) unless a newer
+    // generation has already superseded it.
+    function summarizeResult(msg) {
+      const r = msg.result || {};
+      if (msg.status === 'error') return r.error || 'error';
+      if (Array.isArray(r.offers)) {
+        if (r.status && r.status !== 'ok') return r.message || r.status;
+        return `${r.offers.length} flight${r.offers.length === 1 ? '' : 's'} · ${r.date || ''}`;
+      }
+      if (msg.tool === 'nlu_extract') return `understood: ${r.intent || 'nothing yet'}${r.source ? ' (' + r.source + ')' : ''}`;
+      if (r.confirmation_id) return `confirmation ${r.confirmation_id}`;
+      if (r.ticket_id) return `ticket ${r.ticket_id}`;
+      if (r.section) return r.section;
+      const keys = Object.keys(r);
+      return keys.length ? keys.slice(0, 4).join(', ') : 'done';
+    }
+
+    function renderToolResult(msg) {
+      // Superseded only if a newer call to the same tool has been dispatched
+      // since (e.g. a speculative search that finished just before the
+      // user's correction triggered a fresh one).
+      const stale = (msg.generation || 0) < (latestCallGen[msg.tool] || 0);
+      const card = toolCards[msg.call_id];
+      if (card) {
+        const spin = card.querySelector('.spin');
+        if (spin) spin.remove();
+        card.classList.add(msg.status === 'error' ? 'errored' : 'done');
+        if (stale) card.classList.add('stale');
+        const kindEl = card.querySelector('.evt-kind');
+        if (kindEl) kindEl.textContent = msg.status === 'error' ? 'Tool error' : (stale ? 'Result (stale, ignored)' : 'Result');
+        const line = document.createElement('div');
+        line.className = 'result-line';
+        line.textContent = (msg.status === 'error' ? '⚠ ' : '✓ ') + summarizeResult(msg);
+        card.appendChild(line);
+      }
+      if (!stale) hook('onToolResult', msg, api);
+    }
+
     function renderState(msg) {
+      latestGeneration = Math.max(latestGeneration, msg.generation || 0);
       if (genBadge) genBadge.textContent = `generation ${msg.generation}`;
       if (intentVal) intentVal.textContent = msg.intent || 'none yet';
       const slots = msg.slots || {};
       for (const f of fields) {
         const valueEl = $('val-' + f.key);
         const fieldEl = $('field-' + f.key);
+        const subEl = $('sub-' + f.key);
         if (!valueEl || !fieldEl) continue;
         const v = slots[f.key];
         if (v) {
-          if (valueEl.textContent !== String(v)) {
+          const changed = valueEl.textContent !== String(v);
+          if (changed) {
             fieldEl.classList.add('just-updated');
             setTimeout(() => fieldEl.classList.remove('just-updated'), 520);
           }
           valueEl.textContent = v;
           valueEl.classList.remove('empty');
           fieldEl.classList.add('filled');
+          if (changed && subEl) hook('decorateField', f.key, String(v), subEl);
         } else {
           valueEl.textContent = '—';
           valueEl.classList.add('empty');
           fieldEl.classList.remove('filled');
+          if (subEl) subEl.textContent = '';
         }
       }
     }
@@ -205,15 +278,28 @@
       clearTimeout(reconnectTimer);
       setConn(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(`${proto}://${location.host}/ws`);
+      let socket;
+      try {
+        socket = new WebSocket(`${proto}://${location.host}/ws`);
+      } catch (err) {
+        // blocked by a proxy / extension / policy: pages fall back to REST
+        ws = null;
+        setConn('down');
+        reconnectAttempts += 1;
+        reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000));
+        return;
+      }
       ws = socket;
 
       socket.onopen = () => {
         if (ws !== socket) return;
         reconnectAttempts = 0;
+        latestGeneration = 0;
+        latestCallGen = {};
         setConn('live');
         showHint('');
         socket.send(JSON.stringify({ type: 'init', domain: config.domain || 'all' }));
+        hook('onConnected');
       };
 
       socket.onclose = () => {
@@ -233,9 +319,17 @@
         let msg;
         try { msg = JSON.parse(evt.data); } catch { return; }
         if (msg.type === 'nlu_backend' && backendChain) backendChain.textContent = msg.chain;
+        else if (msg.type === 'flights_backend' && flightsBackendChain) flightsBackendChain.textContent = msg.chain;
         else if (msg.type === 'action') renderAction(msg);
         else if (msg.type === 'state') renderState(msg);
-        else if (msg.type === 'error') showHint(msg.message || 'The agent hit an error on that turn.', 6000);
+        else if (msg.type === 'tool_result') renderToolResult(msg);
+        else if (msg.type === 'booking') {
+          if (msg.ok && msg.booking) {
+            addEvent('booking', 'booking', 'Booking (simulated)',
+              `Confirmation <b>${esc(msg.booking.confirmation_id)}</b> for ${esc(msg.booking.passenger_name)}`, msg.offer_id || '');
+          }
+          hook('onBooking', msg);
+        } else if (msg.type === 'error') showHint(msg.message || 'The agent hit an error on that turn.', 6000);
       };
     }
 
@@ -274,6 +368,7 @@
       talk.value = '';
       lastSentLength = 0;
       setSending(true);
+      hook('onTurnSent');
     }
 
     let debounceTimer = null;
@@ -311,33 +406,57 @@
     if (resetBtn) resetBtn.addEventListener('click', () => {
       toolCards = {};
       cancelled = 0;
+      latestGeneration = 0;
       if (cancelCount) cancelCount.textContent = '0';
-      timelineEl.innerHTML = '<div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>';
+      timelineEl.innerHTML = emptyStateHtml;
       talk.value = '';
       lastSentLength = 0;
       setSending(false);
+      renderState({ generation: 0, intent: null, slots: {} });
+      hook('onReset');
       reconnectAttempts = 0;
       clearTimeout(reconnectTimer);
       if (ws) { const old = ws; ws = null; old.close(); }
       connect();
     });
 
-    document.querySelectorAll('.chip[data-fill]').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        talk.value = chip.dataset.fill;
-        talk.focus();
-      });
+    // Sends a complete turn in one frame (used by the flights page's search
+    // form): same text_chunk/end_of_turn pipeline as the talk box, so the
+    // trip card and timeline react identically either way.
+    function sendOwnTurn(text) {
+      if (!text) return false;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showHint('Not connected yet — try again in a second.');
+        return false;
+      }
+      clearTimeout(debounceTimer);
+      talk.value = '';
+      lastSentLength = 0;
+      turnStartedAt = performance.now();
+      send({ type: 'text_chunk', text: text, end_of_turn: true });
+      setSending(true);
+      hook('onTurnSent');
+      return true;
+    }
+
+    // Delegated, so chips added after load (e.g. live popular routes) work too.
+    document.addEventListener('click', (e) => {
+      const chip = e.target.closest && e.target.closest('.chip[data-fill]');
+      if (!chip || !talk) return;
+      talk.value = chip.dataset.fill;
+      talk.focus();
     });
 
     function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
     async function runDemo() {
-      if (demoRunning || !config.demoScript) return;
+      if (demoRunning || !demoScript) return;
       demoRunning = true;
       talk.value = '';
       lastSentLength = 0;
       turnStartedAt = performance.now();
       setSending(true);
-      for (const step of config.demoScript) {
+      hook('onTurnSent');
+      for (const step of demoScript) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
           showHint('Lost connection mid-demo — reconnecting, try the demo again once it says "live".');
           break;
@@ -366,8 +485,40 @@
       });
     });
 
+    const api = {
+      send,
+      sendTurn: sendOwnTurn,
+      isConnected: () => !!(ws && ws.readyState === WebSocket.OPEN),
+      setDemoScript: (steps) => { if (Array.isArray(steps) && steps.length) demoScript = steps; },
+      generation: () => latestGeneration,
+      esc,
+    };
+
+    checkServerVersion();
     connect();
+    return api;
   }
 
-  global.PrismAssistant = { init };
+  // The server reads page files from disk on every request, so a server
+  // process started before an update serves NEW pages against its OLD API --
+  // every fetch 404s and the site just looks broken. Say so, loudly.
+  const API_VERSION = 3;
+  async function checkServerVersion() {
+    let ok = false;
+    try {
+      const resp = await fetch('/api/version', { cache: 'no-store' });
+      if (resp.ok) ok = ((await resp.json()).api || 0) >= API_VERSION;
+    } catch { ok = false; }
+    if (ok || document.getElementById('serverBanner')) return ok;
+    const banner = document.createElement('div');
+    banner.id = 'serverBanner';
+    banner.className = 'server-banner';
+    banner.innerHTML = '⚠ An older server process is still answering on this port, so searches can’t work. ' +
+      'Run <code>python server/app.py</code> again — it now stops the old process automatically — then reload this page. ' +
+      '(Manual way on Windows: <code>netstat -ano | findstr :' + (location.port || '80') + '</code>, then <code>taskkill /PID &lt;pid&gt; /F</code>.)';
+    document.body.prepend(banner);
+    return ok;
+  }
+
+  global.PrismAssistant = { init, esc, checkServerVersion };
 })(window);

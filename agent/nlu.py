@@ -88,27 +88,29 @@ class NLUResult:
 # --------------------------------------------------------------------------
 
 _INTENT_KEYWORDS = {
-    "book_flight": ["book", "flight", "fly"],
+    "book_flight": [
+        "book", "flight", "fly", "flying", "plane", "airfare", "fares",
+        "ticket to", "tickets to", "trip to", "travel to", "travelling to",
+        "traveling to", "outta", "headed to", "heading to",
+    ],
     "support_ticket": ["broken", "issue", "not working", "support", "help with my"],
 }
 
-# Case-insensitive, and the lookahead lets the captured city run across
-# more than one word ("New York", "Los Angeles") instead of stopping at
-# the first word boundary. An earlier version was case-sensitive and
-# single-word-only, so typing in lowercase (the common case -- nobody
-# reliably capitalizes while typing fast) or a two-word city silently
-# extracted nothing, which made the live demo look hardcoded to the two
-# exact example phrases rather than genuinely parsing free text.
-_DEST_RE = re.compile(r"\bto ([A-Za-z][A-Za-z\s]*?)(?=\s+on\b|$)", re.IGNORECASE)
-_ORIGIN_RE = re.compile(r"\bfrom ([A-Za-z][A-Za-z\s]*?)(?=\s+to\b|\s+on\b|$)", re.IGNORECASE)
-_DATE_RE = re.compile(r"\bon (the )?(\d{1,2}(st|nd|rd|th)?( of)? ?[A-Za-z]*)\b", re.IGNORECASE)
+# Origin / destination / date extraction lives in agent/travel_parse.py and
+# is backed by the world airport gazetteer (agent/airports.py, compiled
+# from OurAirports + OpenFlights): any of ~3,200 airports, their cities and
+# historic names ("Bombay", "Peking"), IATA codes, in lowercase or with
+# informal phrasing ("outta chicago headed to miami next friday",
+# "Delhi to Paris tomorrow"). Places the gazetteer doesn't know are still
+# captured from phrasing, at lower confidence. Earlier versions used two
+# regexes here (`from X to Y on Z`) that only worked for that exact shape.
 _DEVICE_RE = re.compile(r"\b(Galaxy [A-Za-z0-9]+|Prism ?\w*)\b", re.IGNORECASE)
 
 
 class RegexNLUProvider:
-    """Deterministic fallback. Only knows book_flight / support_ticket --
-    kept intentionally simple; see AnthropicNLUProvider for the version
-    that generalizes to arbitrary manifest tools."""
+    """Deterministic, offline provider -- no model, no network. Knows
+    book_flight (via the airport gazetteer) and support_ticket; see the
+    LLM providers below for generalising to arbitrary manifest tools."""
 
     async def understand(
         self,
@@ -118,22 +120,36 @@ class RegexNLUProvider:
         current_slots: dict[str, Any] | None = None,
         current_intent: Optional[str] = None,
     ) -> NLUResult:
+        from .travel_parse import extract_route, extract_trip_options
+
         lowered = text.lower()
         intent = None
         for candidate, keywords in _INTENT_KEYWORDS.items():
-            if any(kw in lowered for kw in keywords):
+            if any(re.search(rf"\b{re.escape(kw)}\b", lowered) for kw in keywords):
                 intent = candidate
                 break
+
+        origin = destination = None
+        route_info: dict = {}
+        if intent == "book_flight" or (intent is None and current_intent in (None, "book_flight")):
+            origin, destination, route_info = extract_route(text)
+            # "chicago to miami tomorrow" names no flight keyword, but two
+            # recognised airports/cities is an unambiguous travel request.
+            if intent is None and route_info.get("origin") == "known" and route_info.get("destination") == "known":
+                intent = "book_flight"
         intent = intent or current_intent
 
         slots: dict[str, SlotObservation] = {}
         if intent == "book_flight":
-            if m := _DEST_RE.search(text):
-                slots["destination"] = SlotObservation(m.group(1))
-            if m := _ORIGIN_RE.search(text):
-                slots["origin"] = SlotObservation(m.group(1))
-            if m := _DATE_RE.search(text):
-                slots["date"] = SlotObservation(m.group(2).strip())
+            conf = {"known": 0.95, "guessed": 0.6}
+            if destination:
+                slots["destination"] = SlotObservation(destination, conf[route_info["destination"]])
+            if origin:
+                slots["origin"] = SlotObservation(origin, conf[route_info["origin"]])
+            # date, and -- only when mentioned -- return_date, passengers,
+            # cabin (optional search_flights parameters in the manifest)
+            for key, value in extract_trip_options(text).items():
+                slots[key] = SlotObservation(value)
         elif intent == "support_ticket":
             if m := _DEVICE_RE.search(text):
                 slots["device_model"] = SlotObservation(m.group(1))

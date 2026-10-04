@@ -12,6 +12,7 @@
     <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
     <div class="links">
       <a href="/flights">Flights</a>
+      <a href="/airports">Airports</a>
       <a href="/support">Support</a>
       <a href="/how-it-works" class="active">How it works</a>
     </div>
@@ -92,7 +93,40 @@
       server filters the tool manifest per domain before the agent ever sees it, so each page's agent
       genuinely only knows about its own tools.
     </p>
+
+    <h2 style="margin-top:36px">The world flight model behind Flights</h2>
+    <p class="lede">
+      <code>search_flights</code> and <code>book_flight</code> don't call an airline API. They run on a model
+      compiled offline by <code>scripts/build_flight_model.py</code> from two public datasets —
+      <b>OurAirports</b> (every airport, its type, scheduled service, IATA code and old names like “Bombay”) and
+      <b>OpenFlights</b> (which airlines fly which airport pairs, with which aircraft). The build cleans the network
+      for later airline mergers and shutdowns and for airports that replaced older ones, then fits a weekly frequency
+      to every airline-route so the whole network flies about as many flights a day as the real world does.
+    </p>
+    <div class="grid-3" id="modelFacts">
+      <div class="feature-card"><div class="icon">🛬</div><h3 data-count="airports">—</h3><p>major airports (large and medium, with scheduled service) in <b data-count="countries">—</b> countries</p></div>
+      <div class="feature-card"><div class="icon">🧭</div><h3 data-count="airport_pairs">—</h3><p>airport pairs flown by <b data-count="carriers">—</b> airlines — connections and two-stop trips are built through real hubs</p></div>
+      <div class="feature-card"><div class="icon">📅</div><h3 data-count="fitted_daily_departures">—</h3><p>modeled departures per day, calibrated to the real-world total (~38.9M flights in 2019)</p></div>
+    </div>
+    <p class="lede" style="margin-top:22px">
+      For any date the engine derives which flights operate that day, departure and arrival times in local time
+      zones, block times from great-circle distance, fares (distance, advance purchase, weekday, season, time of day,
+      competition, low-cost carriers) and seats left — deterministic per date, so the same search returns the same
+      schedule and a different day changes the way it would. It's a model of the network, not live availability:
+      delays, sell-outs and today's actual fares can't be known offline, and the route data is a 2014 snapshot that
+      the build updates for known changes but can't extend with routes launched since.
+    </p>
   </div>
+<script>
+  fetch('/api/model').then((r) => r.ok ? r.json() : null).then((meta) => {
+    if (!meta) return;
+    const values = { ...(meta.counts || {}), ...(meta.calibration || {}) };
+    document.querySelectorAll('[data-count]').forEach((el) => {
+      const v = values[el.dataset.count];
+      if (v != null) el.textContent = Number(v).toLocaleString();
+    });
+  }).catch(() => {});
+</script>
 
   <div class="site-footer">
     <span>prism-agent — Samsung PRISM Theme 05</span>

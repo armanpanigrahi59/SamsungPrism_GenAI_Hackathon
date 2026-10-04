@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Airports — PRISM Travel</title>
+<link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+
+  <div class="nav">
+    <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
+    <div class="links">
+      <a href="/flights">Flights</a>
+      <a href="/airports" class="active">Airports</a>
+      <a href="/support">Support</a>
+      <a href="/how-it-works">How it works</a>
+    </div>
+    <a class="nav-cta" href="/flights">Search flights</a>
+  </div>
+
+  <div class="hero compact">
+    <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
+      <source src="/assets/hero.mp4" type="video/mp4" />
+    </video>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Every major airport in the world.</h1>
+      <p>Browse by continent and country, search by city, airport name or IATA code, see where each airport
+         flies to — and start a flight search from any of them in one click.</p>
+      <div class="hero-stats" id="heroStats">
+        <span><b id="statAirports">—</b> airports</span>
+        <span><b id="statCountries">—</b> countries</span>
+        <span><b id="statRoutes">—</b> routes</span>
+        <span><b id="statAirlines">—</b> airlines</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="wide-shell">
+    <div class="card explorer-card">
+      <div class="continent-tabs" id="continentTabs" role="tablist" aria-label="Continent">
+        <button type="button" data-continent="" class="active" role="tab" aria-selected="true">All</button>
+      </div>
+
+      <div class="explorer-controls">
+        <div>
+          <label for="exploreSearch">Search</label>
+          <input type="search" id="exploreSearch" placeholder="City, airport, country or code — e.g. Mumbai, JFK"
+                 autocomplete="off" spellcheck="false" />
+        </div>
+        <div>
+          <label for="countrySelect">Country</label>
+          <select id="countrySelect"><option value="">All countries</option></select>
+        </div>
+        <div>
+          <label for="sortSelect">Sort by</label>
+          <select id="sortSelect">
+            <option value="routes">Most connected</option>
+            <option value="name">City A–Z</option>
+            <option value="code">IATA code</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="explorer-meta">
+        <span id="exploreCount" aria-live="polite">Loading airports…</span>
+        <label class="toggle"><input type="checkbox" id="routesOnly" checked /> Only airports with scheduled flights</label>
+      </div>
+
+      <div class="airport-grid" id="airportGrid"></div>
+      <div class="pager" id="pager" hidden>
+        <button type="button" id="prevPage">← Previous</button>
+        <span id="pageInfo"></span>
+        <button type="button" id="nextPage">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawerTitle" role="dialog">
+    <div class="drawer-head">
+      <div>
+        <h3 id="drawerTitle">Airport</h3>
+        <p id="drawerSub"></p>
+      </div>
+      <button type="button" class="btn-ghost small drawer-close" id="drawerClose" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="site-footer">
+    <span>prism-agent — Samsung PRISM Theme 05</span>
+    <span>Airport data: OurAirports (public domain) · routes: OpenFlights (ODbL)</span>
+  </div>
+
+<script src="/assets/assistant.js"></script>
+<script src="/assets/airports.js"></script>
+</body>
+</html>

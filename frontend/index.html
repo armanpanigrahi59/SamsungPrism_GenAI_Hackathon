@@ -12,6 +12,7 @@
     <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
     <div class="links">
       <a href="/flights">Flights</a>
+      <a href="/airports">Airports</a>
       <a href="/support">Support</a>
       <a href="/how-it-works">How it works</a>
     </div>
@@ -38,28 +39,39 @@
 
   <div class="page">
     <h2>Built for Samsung PRISM Theme 05 — Interruptible Real-Time Agents</h2>
-    <p class="lede">Three pages, one backend. Each live page opens its own WebSocket session with its own
+    <p class="lede">Four pages, one backend. Each live page opens its own WebSocket session with its own
        fresh agent and its own scoped tool manifest — pick one to see it live, or read how the
        cancellation mechanism actually works first.</p>
     <div class="grid-3">
-      <div class="feature-card">
+      <a class="feature-card" href="/flights">
         <div class="icon">✈</div>
         <h3>Flights</h3>
-        <p>Book a flight, then barge in mid-search with a correction. Watch the stale search get cancelled
-           and a fresh one dispatched — live.</p>
-      </div>
-      <div class="feature-card">
+        <p>Search any of the world's major airports — day-by-day schedules and fares from an offline world
+           flight model, no airline API. Barge in mid-search with a correction and watch the stale search get
+           cancelled and a fresh one dispatched — live.</p>
+        <span class="go">Open flights →</span>
+      </a>
+      <a class="feature-card" href="/airports">
+        <div class="icon">🌍</div>
+        <h3>Airports</h3>
+        <p>Browse all 3,000+ airports in the world flight model by continent and country, see where each one
+           flies and how often, and start a search from any of them in one click.</p>
+        <span class="go">Explore airports →</span>
+      </a>
+      <a class="feature-card" href="/support">
         <div class="icon">🛠</div>
         <h3>Support</h3>
         <p>Describe a device issue. A different tool manifest, a different agent session — and a look at
            how the agent asks instead of guessing when it's genuinely unsure.</p>
-      </div>
-      <div class="feature-card">
+        <span class="go">Open support →</span>
+      </a>
+      <a class="feature-card" href="/how-it-works">
         <div class="icon">🧠</div>
         <h3>How it works</h3>
-        <p>The generation-tagged cancellation spine underneath both pages, and what each timeline card
-           actually represents.</p>
-      </div>
+        <p>The generation-tagged cancellation spine underneath both pages, the offline flight model, and what
+           each timeline card actually represents.</p>
+        <span class="go">Read the architecture →</span>
+      </a>
     </div>
   </div>
 

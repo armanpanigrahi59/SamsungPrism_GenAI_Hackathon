@@ -12,13 +12,14 @@
     <a class="brand" href="/"><span class="dot"></span> PRISM Travel</a>
     <div class="links">
       <a href="/flights">Flights</a>
+      <a href="/airports">Airports</a>
       <a href="/support" class="active">Support</a>
       <a href="/how-it-works">How it works</a>
     </div>
     <div class="status-pill down" id="connPill"><span class="led"></span><span id="connText">connecting…</span></div>
   </div>
 
-  <div class="hero">
+  <div class="hero compact">
     <video class="hero-video" autoplay muted loop playsinline poster="/assets/hero-poster.jpg">
       <source src="/assets/hero.mp4" type="video/mp4" />
     </video>
@@ -58,7 +59,7 @@
         </div>
         <div class="conn-hint" id="connHint" aria-live="polite"></div>
         <div class="footer-stats">
-          <span>Backend: <b id="backendChain">—</b></span>
+          <span>NLU: <b id="backendChain">—</b></span>
           <span>Last turn latency: <b id="latencyVal">—</b></span>
           <span>Cancelled calls: <b id="cancelCount">0</b></span>
           <span>Tools loaded: <b>create_support_ticket, lookup_manual</b></span>
@@ -68,7 +69,7 @@
 
     <div class="card timeline-card">
       <h2>Live agent timeline</h2>
-      <p class="hint">Every tool call, cancellation, clarification and response the agent emits, in order.</p>
+      <p class="hint">Every tool call, result, cancellation, clarification and response the agent emits, in order.</p>
       <div class="timeline" id="timeline">
         <div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>
       </div>
