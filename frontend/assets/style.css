@@ -40,6 +40,7 @@ a { color: inherit; }
 .nav .status-pill .led { width: 7px; height: 7px; border-radius: 50%; background: #666; }
 .nav .status-pill.live .led { background: #3ddc84; box-shadow: 0 0 6px #3ddc84; }
 .nav .status-pill.down .led { background: #e35252; }
+.nav .status-pill.connecting .led { background: #e3a008; box-shadow: 0 0 6px #e3a008; animation: blink 1s infinite; }
 .nav-cta { background: #fff; color: var(--blue-900); font-weight: 700; font-size: 0.85rem; padding: 10px 20px; border-radius: 999px; text-decoration: none; white-space: nowrap; }
 .nav-cta:hover { filter: brightness(0.96); }
 @media (max-width: 760px) { .nav .links { display: none; } }
@@ -132,6 +133,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-interrupt:hover:not(:disabled) { background: var(--cancel-bg); }
 .btn-ghost { background: #eef3fb; color: var(--blue-800); }
 .btn-ghost:hover:not(:disabled) { background: #e1ebf9; }
+.conn-hint { font-size: 0.78rem; color: var(--warn); margin: 8px 0 0; min-height: 1.1em; }
+.chip.disabled { opacity: 0.55; pointer-events: none; }
 
 /* ---- Timeline card ---- */
 .timeline-card { padding: 18px 20px; display: flex; flex-direction: column; min-height: 420px; max-height: 620px; }

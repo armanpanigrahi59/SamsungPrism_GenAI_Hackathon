@@ -24,14 +24,19 @@
  * interruptBtn, resetBtn, timeline, emptyState, genBadge, intentVal,
  * backendChain, latencyVal, cancelCount, connPill, connText, fieldsGrid,
  * and any number of elements with [data-demo] / [data-fill="..."].
+ * connHint (optional) gets a one-line status message when a send can't
+ * go out right now (not connected yet / reconnecting).
  */
 (function (global) {
+  const MAX_INPUT_LENGTH = 2000; // matches the server-side PRISM_MAX_TEXT_LENGTH cap
+
   function init(config) {
     const $ = (id) => document.getElementById(id);
     const timelineEl = $('timeline');
     const emptyState = $('emptyState');
     const connPill = $('connPill');
     const connText = $('connText');
+    const connHint = $('connHint');
     const genBadge = $('genBadge');
     const intentVal = $('intentVal');
     const backendChain = $('backendChain');
@@ -39,6 +44,9 @@
     const cancelCount = $('cancelCount');
     const talk = $('talk');
     const fieldsGrid = $('fieldsGrid');
+    const sendBtn = $('sendBtn');
+    const interruptBtn = $('interruptBtn');
+    const resetBtn = $('resetBtn');
 
     const fields = config.fields || [];
     let cancelled = 0;
@@ -47,6 +55,9 @@
     let ws = null;
     let lastSentLength = 0;
     let demoRunning = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+    let hintTimer = null;
 
     // Build the live-understanding field cards once, from config -- so a
     // Support page shows Device/Topic/Issue instead of From/To/Date, with
@@ -62,11 +73,39 @@
       });
     }
 
-    function setConn(live) {
+    // ---- connection status -------------------------------------------
+    // Four states instead of a binary live/down, so "the socket hasn't
+    // finished connecting yet" and "it dropped and is retrying" both get a
+    // visible, honest label instead of just looking broken.
+    function setConn(state) {
       if (!connPill) return;
-      connPill.classList.toggle('live', live);
-      connPill.classList.toggle('down', !live);
-      connText.textContent = live ? 'live' : 'disconnected';
+      connPill.classList.remove('live', 'down', 'connecting');
+      if (state === 'live') {
+        connPill.classList.add('live');
+        connText.textContent = 'live';
+      } else if (state === 'connecting') {
+        connPill.classList.add('connecting');
+        connText.textContent = 'connecting…';
+      } else if (state === 'reconnecting') {
+        connPill.classList.add('connecting');
+        connText.textContent = `reconnecting (${reconnectAttempts})…`;
+      } else {
+        connPill.classList.add('down');
+        connText.textContent = 'disconnected';
+      }
+    }
+
+    function showHint(text, ms) {
+      if (!connHint) return;
+      connHint.textContent = text;
+      clearTimeout(hintTimer);
+      if (text) hintTimer = setTimeout(() => { connHint.textContent = ''; }, ms || 4000);
+    }
+
+    function setSending(active) {
+      if (!sendBtn) return;
+      sendBtn.disabled = active;
+      sendBtn.textContent = active ? 'Thinking…' : 'Send turn ↵';
     }
 
     function fmtTime(ts) { return (ts % 100000).toFixed(0) + 'ms'; }
@@ -87,6 +126,7 @@
     }
 
     function markTurnEnd() {
+      setSending(false);
       if (turnStartedAt == null) return;
       const ms = performance.now() - turnStartedAt;
       if (latencyVal) latencyVal.textContent = ms.toFixed(0) + ' ms';
@@ -156,72 +196,118 @@
       }
     }
 
+    // ---- WebSocket lifecycle, with auto-reconnect ---------------------
+    // Each socket is tagged by identity: a late onclose from a socket
+    // that's since been superseded (e.g. by the "New session" button
+    // explicitly reconnecting) is ignored instead of scheduling a second,
+    // duplicate reconnect loop.
     function connect() {
+      clearTimeout(reconnectTimer);
+      setConn(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => {
-        setConn(true);
-        ws.send(JSON.stringify({ type: 'init', domain: config.domain || 'all' }));
+      const socket = new WebSocket(`${proto}://${location.host}/ws`);
+      ws = socket;
+
+      socket.onopen = () => {
+        if (ws !== socket) return;
+        reconnectAttempts = 0;
+        setConn('live');
+        showHint('');
+        socket.send(JSON.stringify({ type: 'init', domain: config.domain || 'all' }));
       };
-      ws.onclose = () => setConn(false);
-      ws.onerror = () => setConn(false);
-      ws.onmessage = (evt) => {
+
+      socket.onclose = () => {
+        if (ws !== socket) return; // superseded by an explicit reconnect already
+        setConn('down');
+        setSending(false);
+        reconnectAttempts += 1;
+        const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000);
+        showHint(`Connection dropped — retrying in ${Math.round(delay / 1000)}s…`, delay + 500);
+        reconnectTimer = setTimeout(connect, delay);
+      };
+
+      socket.onerror = () => { /* onclose always follows; nothing extra to do here */ };
+
+      socket.onmessage = (evt) => {
+        if (ws !== socket) return;
         let msg;
         try { msg = JSON.parse(evt.data); } catch { return; }
         if (msg.type === 'nlu_backend' && backendChain) backendChain.textContent = msg.chain;
         else if (msg.type === 'action') renderAction(msg);
         else if (msg.type === 'state') renderState(msg);
+        else if (msg.type === 'error') showHint(msg.message || 'The agent hit an error on that turn.', 6000);
       };
     }
 
     function send(obj) {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+        return true;
+      }
+      return false;
     }
 
+    // Only advances lastSentLength for text that was ACTUALLY transmitted.
+    // (An earlier version advanced it unconditionally, so text typed while
+    // the socket was still connecting -- or had dropped -- was silently
+    // marked "already sent" and never actually reached the server, which
+    // is exactly what made the page look unresponsive with zero feedback.)
     function sendDelta(endOfTurn) {
-      const text = talk.value;
+      const text = talk.value.slice(0, MAX_INPUT_LENGTH);
       const delta = text.slice(lastSentLength);
-      lastSentLength = text.length;
-      if (!delta && !endOfTurn) return;
+      if (!delta && !endOfTurn) return true;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
       if (turnStartedAt == null) turnStartedAt = performance.now();
       send({ type: 'text_chunk', text: delta, end_of_turn: endOfTurn });
+      lastSentLength = text.length;
+      return true;
+    }
+
+    function trySendTurn() {
+      clearTimeout(debounceTimer);
+      const hadText = talk.value.trim().length > 0 || lastSentLength > 0;
+      if (!hadText) return; // nothing typed this turn -- Enter on an empty box is a no-op
+      if (!sendDelta(true)) {
+        showHint('Not connected yet — your text is still in the box, try again in a second.');
+        return;
+      }
+      talk.value = '';
+      lastSentLength = 0;
+      setSending(true);
     }
 
     let debounceTimer = null;
     if (talk) {
       talk.addEventListener('input', () => {
+        if (talk.value.length > MAX_INPUT_LENGTH) {
+          talk.value = talk.value.slice(0, MAX_INPUT_LENGTH);
+          showHint(`Capped at ${MAX_INPUT_LENGTH} characters.`);
+        }
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => sendDelta(false), 220);
       });
       talk.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          clearTimeout(debounceTimer);
-          sendDelta(true);
-          talk.value = '';
-          lastSentLength = 0;
+          trySendTurn();
         }
       });
     }
 
-    const sendBtn = $('sendBtn');
-    if (sendBtn) sendBtn.addEventListener('click', () => {
-      clearTimeout(debounceTimer);
-      sendDelta(true);
-      talk.value = '';
-      lastSentLength = 0;
-    });
+    if (sendBtn) sendBtn.addEventListener('click', trySendTurn);
 
-    const interruptBtn = $('interruptBtn');
     if (interruptBtn) interruptBtn.addEventListener('click', () => {
       clearTimeout(debounceTimer);
-      send({ type: 'interruption' });
+      if (!send({ type: 'interruption' })) {
+        showHint('Not connected yet — can\'t interrupt until the socket reconnects.');
+        return;
+      }
       talk.value = '';
       lastSentLength = 0;
       turnStartedAt = performance.now();
+      setSending(false);
     });
 
-    const resetBtn = $('resetBtn');
     if (resetBtn) resetBtn.addEventListener('click', () => {
       toolCards = {};
       cancelled = 0;
@@ -229,7 +315,10 @@
       timelineEl.innerHTML = '<div class="empty-state" id="emptyState">Nothing yet — try a chip above, or type your own request.</div>';
       talk.value = '';
       lastSentLength = 0;
-      if (ws) ws.close();
+      setSending(false);
+      reconnectAttempts = 0;
+      clearTimeout(reconnectTimer);
+      if (ws) { const old = ws; ws = null; old.close(); }
       connect();
     });
 
@@ -247,7 +336,12 @@
       talk.value = '';
       lastSentLength = 0;
       turnStartedAt = performance.now();
+      setSending(true);
       for (const step of config.demoScript) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          showHint('Lost connection mid-demo — reconnecting, try the demo again once it says "live".');
+          break;
+        }
         if (step.interrupt) {
           send({ type: 'interruption' });
         } else {
@@ -257,8 +351,19 @@
       }
       demoRunning = false;
     }
+    // Disabled + relabeled while running so a second click (or an
+    // impatient double-click) can't fire a second overlapping run of the
+    // same script against the same session.
     document.querySelectorAll('.chip[data-demo]').forEach((chip) => {
-      chip.addEventListener('click', runDemo);
+      const originalLabel = chip.textContent;
+      chip.addEventListener('click', async () => {
+        if (demoRunning) return;
+        chip.classList.add('disabled');
+        chip.textContent = '⏳ Running…';
+        await runDemo();
+        chip.textContent = originalLabel;
+        chip.classList.remove('disabled');
+      });
     });
 
     connect();

@@ -54,14 +54,36 @@ Wire protocol (JSON text frames over the WebSocket):
     {"type": "state", "intent": ..., "slots": {...}, "generation": <int>}
         -- a slot-state snapshot sent after every action, so the UI's
            live trip-summary card never has to poll or guess.
+    {"type": "error", "message": "..."}
+        -- sent, best-effort, if this session's turn hit an unhandled
+           exception, right before the connection is dropped. assistant.js
+           surfaces it as an inline hint instead of just going silent.
 
 Run directly with `python server/app.py` (serves the frontend/ folder too,
 so there's nothing else to stand up -- open http://127.0.0.1:8000).
+
+Deployment knobs (all optional -- sane defaults for local dev):
+  PORT / PRISM_PORT   Port to bind. Most PaaS providers set PORT for you.
+  PRISM_HOST          Override the bind address (default: 0.0.0.0 if PORT
+                       is set, else 127.0.0.1 -- see run() below).
+  PRISM_MAX_TEXT_LENGTH
+                       Cap, in characters, on a single text_chunk's text
+                       (default 2000). Enforced server-side regardless of
+                       what the frontend's own textarea cap allows.
+  PRISM_LOG_LEVEL     Python logging level (default INFO).
+See README.md's "Deployment" section for a walkthrough and the current
+scaling caveats (state is per-WebSocket-connection, in-process memory).
+
+Each connection is individually try/excepted (see ws() below): one
+session's bug drops that session with a client-visible error frame, not
+the whole process.
 """
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
+import os
 import re
 from pathlib import Path
 
@@ -85,6 +107,20 @@ DOMAIN_TOOLS = {
     "flights": {"search_flights", "book_flight"},
     "support": {"create_support_ticket", "lookup_manual"},
 }
+
+# Hard cap on a single text_chunk's text, so one misbehaving or hostile
+# client can't balloon memory / NLU request size. Keep in sync with the
+# frontend's own MAX_INPUT_LENGTH in assistant.js -- that one exists so the
+# textarea gives honest feedback before typing past the limit; this one is
+# the actual enforcement, since the frontend's cap is not trustworthy on
+# its own (nothing stops a client from skipping the browser entirely).
+MAX_TEXT_LENGTH = int(os.environ.get("PRISM_MAX_TEXT_LENGTH", "2000"))
+
+logging.basicConfig(
+    level=os.environ.get("PRISM_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger("prism.server")
 
 app = QuartTrio(__name__, static_folder=None)
 
@@ -148,6 +184,15 @@ async def how_it_works_page():
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
+@app.route("/healthz")
+async def healthz():
+    # Plain liveness probe for whatever platform this ends up deployed on
+    # (Render/Railway/Fly/etc. all expect a cheap 200 to decide a instance
+    # is up) -- deliberately does no work beyond confirming the process is
+    # responsive, so it stays cheap even under load.
+    return {"status": "ok"}
+
+
 @app.route("/favicon.ico")
 async def favicon():
     # No favicon asset -- a bare 204 keeps the browser's automatic request
@@ -199,8 +244,20 @@ async def assets(filename: str):
     return resp
 
 
+_connection_counter = 0
+
+
 @app.websocket("/ws")
 async def ws() -> None:
+    # Each connection gets a short id purely for log correlation -- with
+    # more than a handful of concurrent users, "the agent errored" in the
+    # logs is useless without knowing which of N open sockets it was.
+    global _connection_counter
+    _connection_counter += 1
+    conn_id = _connection_counter
+    client = (websocket.scope.get("client") or ("?",))[0]
+    log.info("ws[%s] connecting from %s", conn_id, client)
+
     # First frame picks the domain (see DOMAIN_TOOLS / assistant.js) --
     # everything else about this session is built only after we know it.
     domain = "all"
@@ -218,6 +275,7 @@ async def ws() -> None:
     # fixed (300, 300) window, widened here since real typing speed varies.
     env = MockToolEnvironment(MockConfig(latency_ms=(400.0, 900.0)))
     agent = Agent(registry, env)
+    log.info("ws[%s] domain=%s nlu=%s", conn_id, domain, _describe_nlu_chain(agent.nlu_provider))
 
     await websocket.send(json.dumps({
         "type": "nlu_backend",
@@ -253,11 +311,14 @@ async def ws() -> None:
                     msg = json.loads(raw)
                 except (TypeError, ValueError):
                     continue  # ignore malformed frames rather than killing the session
+                if not isinstance(msg, dict):
+                    continue
                 msg_type = msg.get("type")
                 if msg_type == "text_chunk":
+                    text = str(msg.get("text", ""))[:MAX_TEXT_LENGTH]
                     await events_send.send(InputEvent(
                         type=EventType.TEXT_CHUNK,
-                        payload={"text": msg.get("text", "")},
+                        payload={"text": text},
                         end_of_turn=bool(msg.get("end_of_turn", False)),
                     ))
                 elif msg_type == "interruption":
@@ -265,25 +326,58 @@ async def ws() -> None:
         finally:
             await events_send.aclose()
 
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(agent.run, events_recv, actions_send)
-        nursery.start_soon(pump_actions_to_client)
-        await events_send.send(InputEvent(type=EventType.MANIFEST, payload=manifest))
+    try:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(agent.run, events_recv, actions_send)
+            nursery.start_soon(pump_actions_to_client)
+            await events_send.send(InputEvent(type=EventType.MANIFEST, payload=manifest))
+            try:
+                await pump_client_to_events()
+            finally:
+                # Browser tab closed / WS dropped: tear down this session's
+                # Agent and both pumps rather than leaking the nursery.
+                nursery.cancel_scope.cancel()
+    except Exception:
+        # A bug in one session's turn (bad NLU response shape, a tool
+        # backend raising, etc.) should drop THAT connection cleanly, not
+        # take the whole process down or leave the browser hanging with no
+        # explanation. Best-effort: tell the client why before it closes --
+        # assistant.js surfaces msg.message as an inline hint.
+        log.exception("ws[%s] unhandled error", conn_id)
         try:
-            await pump_client_to_events()
-        finally:
-            # Browser tab closed / WS dropped: tear down this session's
-            # Agent and both pumps rather than leaking the nursery.
-            nursery.cancel_scope.cancel()
+            await websocket.send(json.dumps({
+                "type": "error",
+                "message": "The agent hit an unexpected error. Try 'New session'.",
+            }))
+        except Exception:
+            pass
+    finally:
+        log.info("ws[%s] disconnected", conn_id)
 
 
-def run(host: str = "127.0.0.1", port: int = 8000) -> None:
+def run() -> None:
     from hypercorn.config import Config
     from hypercorn.trio import serve
 
+    port = int(os.environ.get("PORT", os.environ.get("PRISM_PORT", "8000")))
+    # Most PaaS providers (Render, Railway, Fly, Heroku-style buildpacks)
+    # set PORT and expect the process to bind every interface, not just
+    # loopback. Treat PORT being set as the signal to switch the default
+    # bind address -- running locally with no PORT set keeps the original
+    # 127.0.0.1-only behavior, so `python server/app.py` on a laptop
+    # doesn't silently become reachable from the rest of the LAN. Set
+    # PRISM_HOST explicitly to override either way.
+    default_host = "0.0.0.0" if "PORT" in os.environ else "127.0.0.1"
+    host = os.environ.get("PRISM_HOST", default_host)
+
     config = Config()
     config.bind = [f"{host}:{port}"]
-    print(f"prism-agent web bridge -> http://{host}:{port}  (Ctrl+C to stop)")
+    display_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
+    print(f"prism-agent web bridge -> http://{display_host}:{port}  (Ctrl+C to stop)")
+    log.info(
+        "starting on %s:%s (PRISM_NLU_BACKEND=%s)",
+        host, port, os.environ.get("PRISM_NLU_BACKEND", "regex (default)"),
+    )
     trio.run(serve, app, config)
 
 
